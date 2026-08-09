@@ -47,12 +47,36 @@ const runExpiryCheck = async () => {
   }
 };
 
+
+// Reset all bots' monthly message counters on the 1st of each month.
+// This is more reliable than the lazy reset in checkAndIncrementMessageUsage
+// because it runs even if no messages were sent in a given month.
+const resetMonthlyMessageCounters = async () => {
+  const Bot = require('../models/Bot');
+  const now = new Date();
+  const result = await Bot.updateMany(
+    {
+      $expr: {
+        $or: [
+          { $lt: [{ $month: '$messagesResetAt' }, now.getMonth() + 1] },
+          { $lt: [{ $year: '$messagesResetAt' }, now.getFullYear()] },
+        ],
+      },
+    },
+    { $set: { messagesThisMonth: 0, messagesResetAt: now } }
+  );
+  if (result.modifiedCount > 0) {
+    console.log(`[cron] Reset message counters for ${result.modifiedCount} bot(s)`);
+  }
+};
+
 const startCronJobs = () => {
   // Runs every day at 3:00 AM server time
   cron.schedule("0 3 * * *", () => {
     runExpiryCheck().catch((err) => console.error("[cron] Expiry check failed:", err));
   });
-  console.log("Cron jobs scheduled (subscription expiry check: daily 3:00 AM)");
+  cron.schedule("0 0 1 * *", () => { resetMonthlyMessageCounters().catch((err) => console.error("[cron] Counter reset failed:", err)); });
+  console.log("Cron jobs scheduled (subscription expiry: daily 3AM, counter reset: monthly 1st)");
 };
 
 module.exports = { startCronJobs, runExpiryCheck };

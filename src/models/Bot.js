@@ -59,6 +59,7 @@ const botSchema = new mongoose.Schema(
     documentCount: { type: Number, default: 0 },
     messagesThisMonth: { type: Number, default: 0 },
     messagesResetAt: { type: Date, default: Date.now },
+    testMessagesTotal: { type: Number, default: 0 },
   },
   { timestamps: true }
 );

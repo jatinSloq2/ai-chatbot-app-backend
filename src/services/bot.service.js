@@ -155,23 +155,26 @@ const setBotApiKey = async (botId, userId, { type, provider, model, apiKey, conf
 const checkAndIncrementMessageUsage = async (bot) => {
   const plan = await getActivePlan(bot.user);
 
-  // Reset monthly counter if we've rolled into a new month
   const now = new Date();
   const resetAt = new Date(bot.messagesResetAt);
-  if (now.getMonth() !== resetAt.getMonth() || now.getFullYear() !== resetAt.getFullYear()) {
+  const monthChanged =
+    now.getMonth() !== resetAt.getMonth() ||
+    now.getFullYear() !== resetAt.getFullYear();
+
+  if (monthChanged) {
+    await Bot.findByIdAndUpdate(bot._id, { messagesThisMonth: 0, messagesResetAt: now });
     bot.messagesThisMonth = 0;
-    bot.messagesResetAt = now;
   }
 
   if (bot.messagesThisMonth >= plan.limits.maxMessagesPerMonth) {
     throw new ApiError(
       429,
-      `Monthly message limit reached (${plan.limits.maxMessagesPerMonth}) for the current plan. Upgrade to continue.`
+      `Monthly message limit of ${plan.limits.maxMessagesPerMonth} reached for the "${plan.name}" plan. Upgrade to continue.`
     );
   }
 
-  bot.messagesThisMonth += 1;
-  await bot.save();
+  await Bot.findByIdAndUpdate(bot._id, { $inc: { messagesThisMonth: 1 } });
+  return plan;
 };
 
 module.exports = {

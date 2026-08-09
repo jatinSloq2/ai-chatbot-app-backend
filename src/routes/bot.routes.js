@@ -4,9 +4,10 @@ const router = express.Router();
 const botController = require("../controllers/bot.controller");
 const conversationController = require("../controllers/conversation.controller");
 const chatController = require("../controllers/chat.controller");
+const analyticsController = require("../controllers/analytics.controller");
 const { protect } = require("../middlewares/auth.middleware");
 
-router.use(protect); // every route below requires a logged-in user
+router.use(protect);
 
 router.post("/", botController.createBot);
 router.get("/", botController.listBots);
@@ -17,8 +18,13 @@ router.post("/:id/regenerate-key", botController.regenerateKey);
 router.post("/:id/model-config", botController.setModelConfig);
 router.post("/:id/test-chat", chatController.testChat);
 
+// Conversations
 router.get("/:id/conversations", conversationController.listConversations);
 router.get("/:id/conversations/:sessionId", conversationController.getConversation);
-router.get("/:id/analytics", conversationController.getAnalytics);
+
+// Analytics (all from new analytics controller)
+router.get("/:id/analytics", analyticsController.getBotAnalytics);
+router.get("/:id/analytics/events", analyticsController.getRecentEvents);
+router.get("/:id/analytics/domains", analyticsController.getBotDomains);
 
 module.exports = router;
