@@ -7,19 +7,20 @@ const botService = require("../services/bot.service");
 const Bot = require("../models/Bot");
 const { nanoid } = require("nanoid");
 
-// Shared SSE setup — sets all required headers including explicit CORS headers
-// so the stream works from any third-party domain (the widget's host site).
-function setupSSE(req, res) {
+function setupSSE(req, res, extraHeaders = {}) {
   const origin = req.headers.origin || "*";
+  // Set ALL headers before flushHeaders — nothing can be set after
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering if proxied
-  // Explicit CORS headers on SSE — fetch() with EventSource-style streaming
-  // requires these on the actual response, not just the pre-flight.
+  res.setHeader("X-Accel-Buffering", "no");
   res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-api-key");
   res.setHeader("Vary", "Origin");
+
+  // Any extra headers (like X-Session-Id) must come BEFORE flushHeaders
+  Object.entries(extraHeaders).forEach(([k, v]) => res.setHeader(k, v));
+
   if (res.flushHeaders) res.flushHeaders();
 }
 
@@ -28,15 +29,9 @@ function sendEvent(res, event, data) {
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-// POST /api/v1/chat  (auth: bot public key via x-api-key header)
-// body: { message, sessionId? }
-// Streams the response via Server-Sent Events.
 const chat = asyncHandler(async (req, res) => {
   const bot = req.bot;
   const { message } = req.body;
-  // sessionId comes from the widget's localStorage (persisted across page loads).
-  // If null/missing, we generate a fresh one and send it back in the "session" event
-  // so the widget can save it.
   let { sessionId } = req.body;
 
   if (!message?.trim()) throw new ApiError(400, "message is required");
@@ -50,10 +45,10 @@ const chat = asyncHandler(async (req, res) => {
     conversation = await Conversation.create({ bot: bot._id, sessionId, messages: [] });
   }
 
-  setupSSE(req, res);
-  res.setHeader("X-Session-Id", sessionId);
+  // Pass X-Session-Id as an extra header BEFORE flushHeaders is called
+  setupSSE(req, res, { "X-Session-Id": sessionId });
 
-  // Always send the session event FIRST so the widget captures and saves the sessionId
+  // Always send session event first so widget saves the sessionId
   sendEvent(res, "session", { sessionId });
 
   try {
@@ -93,8 +88,6 @@ const chat = asyncHandler(async (req, res) => {
   }
 });
 
-// POST /api/bots/:id/test-chat  (auth: user JWT, owner only)
-// Does NOT count against message quota — for dashboard testing only.
 const testChat = asyncHandler(async (req, res) => {
   const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
   if (!bot) throw new ApiError(404, "Bot not found");

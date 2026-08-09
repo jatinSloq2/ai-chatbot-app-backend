@@ -40,15 +40,15 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
   // Merge saved config with per-embed query-string overrides
   const savedConfig = bot.widgetConfig || {};
   const config = {
-    title:          req.query.title    || savedConfig.title          || "Chat with us",
-    primaryColor:   req.query.color    || savedConfig.primaryColor   || "#f97316",
-    welcomeMessage: req.query.welcome  || savedConfig.welcomeMessage || "Hi! How can I help you today?",
-    position:       req.query.position || savedConfig.position       || "bottom-right",
-    theme:          req.query.theme    || "light",
-    avatar:         req.query.avatar   || savedConfig.avatar         || null,
-    height:         parseInt(req.query.height) || 520,
-    width:          parseInt(req.query.width)  || 360,
-    botName:        bot.name,
+    title: req.query.title || savedConfig.title || "Chat with us",
+    primaryColor: req.query.color || savedConfig.primaryColor || "#f97316",
+    welcomeMessage: req.query.welcome || savedConfig.welcomeMessage || "Hi! How can I help you today?",
+    position: req.query.position || savedConfig.position || "bottom-right",
+    theme: req.query.theme || "light",
+    avatar: req.query.avatar || savedConfig.avatar || null,
+    height: parseInt(req.query.height) || 520,
+    width: parseInt(req.query.width) || 360,
+    botName: bot.name,
   };
 
   const script = buildWidgetScript({ apiBaseUrl, publicKey, config });

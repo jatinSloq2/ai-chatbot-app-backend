@@ -12,40 +12,49 @@ const widgetController = require("./controllers/widget.controller");
 
 const app = express();
 
-// --- Helmet (relaxed for widget delivery) ---
-// The widget.js script and /api/v1/chat SSE are consumed by third-party sites,
-// so we cannot lock down cross-origin policies the way a same-origin app would.
 app.use(
   helmet({
-    crossOriginResourcePolicy: false,       // allow widget.js to be loaded cross-origin
+    crossOriginResourcePolicy: false,
     crossOriginOpenerPolicy: false,
-    contentSecurityPolicy: false,           // embedding sites control their own CSP
+    contentSecurityPolicy: false,
   })
 );
 
-// --- CORS ---
-// The dashboard frontend uses a fixed origin + credentials (cookies).
-// The widget chat endpoint must accept ANY origin since it runs on customers' sites.
 const DASHBOARD_ORIGIN = process.env.CLIENT_URL || "http://localhost:3000";
 
-// Middleware that applies per-request: dashboard routes use strict origin,
-// public widget/chat routes use permissive wildcard CORS.
-const dashboardCors = cors({
-  origin: DASHBOARD_ORIGIN,
-  credentials: true,
+// Smart CORS — checks the path and applies the right policy per request
+// instead of setting one global policy that conflicts with widget routes.
+app.use((req, res, next) => {
+  const isWidgetRoute =
+    req.path === "/widget.js" ||
+    req.path.startsWith("/api/v1/chat") ||
+    req.path.startsWith("/api/v1/widget");
+
+  if (isWidgetRoute) {
+    // Widget routes: open to any origin, no cookies
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-api-key, Authorization");
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+  } else {
+    // Dashboard routes: locked to your frontend origin, with cookies
+    const origin = req.headers.origin;
+    if (origin === DASHBOARD_ORIGIN) {
+      res.setHeader("Access-Control-Allow-Origin", DASHBOARD_ORIGIN);
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    }
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+  }
+
+  next();
 });
 
-const widgetCors = cors({
-  origin: "*",          // widget runs on any third-party website
-  credentials: false,   // cookies don't work cross-origin with wildcard; widget uses x-api-key header
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "x-api-key", "Authorization"],
-});
-
-// Apply dashboard CORS globally first (covers /api/auth/*, /api/bots/*, etc.)
-app.use(dashboardCors);
-
-// Razorpay webhook — raw body before json parser
 app.post(
   "/api/payments/webhook",
   express.raw({ type: "application/json" }),
@@ -60,7 +69,6 @@ if (process.env.NODE_ENV !== "production") {
   app.use(morgan("dev"));
 }
 
-// --- Global rate limiter ---
 const globalLimiter = rateLimit({
   windowMs: (Number(process.env.RATE_LIMIT_WINDOW_MIN) || 15) * 60 * 1000,
   max: Number(process.env.RATE_LIMIT_MAX) || 100,
@@ -69,25 +77,14 @@ const globalLimiter = rateLimit({
 });
 app.use(globalLimiter);
 
-// --- Health check ---
 app.get("/health", (req, res) => {
   res.status(200).json({ success: true, message: "Server is healthy" });
 });
 
-// --- widget.js served with open CORS (any site can load it as a <script> tag) ---
-app.get("/widget.js", widgetCors, widgetController.serveWidgetScript);
+app.get("/widget.js", widgetController.serveWidgetScript);
 
-// --- Public widget/chat API — open CORS, no dashboard cookies needed ---
-// Mount BEFORE the main /api routes so widgetCors applies here
-app.use("/api/v1", widgetCors, (req, res, next) => {
-  // Pre-flight OPTIONS handled automatically by cors()
-  next();
-});
-
-// --- All API routes ---
 app.use("/api", routes);
 
-// --- 404 + error handling ---
 app.use(notFound);
 app.use(errorHandler);
 
