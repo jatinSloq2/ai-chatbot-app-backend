@@ -5,7 +5,7 @@ const connectDB = require("../config/db");
 const User = require("../models/User");
 
 const run = async () => {
-  const email = process.argv[2];
+  const email = "jatinsingh098hp@gmail.com";
   if (!email) {
     console.error("Usage: node src/scripts/makeAdmin.js <email>");
     process.exit(1);

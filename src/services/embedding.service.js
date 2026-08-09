@@ -33,13 +33,37 @@ const embedWithOllama = async (texts, model) => {
   const results = [];
   for (const text of texts) {
     try {
-      const { data } = await axios.post(`${OLLAMA_BASE_URL}/api/embed`, { model, input: text });
-      const vector = data.embeddings ? data.embeddings[0] : data.embedding;
+      // Try the newer /api/embed endpoint first (Ollama >= 0.1.26).
+      // Fall back to the older /api/embeddings endpoint automatically.
+      let vector;
+      try {
+        const { data } = await axios.post(`${OLLAMA_BASE_URL}/api/embed`, {
+          model,
+          input: text,
+        });
+        // /api/embed returns { embeddings: [[...]] }
+        vector = data.embeddings?.[0] ?? data.embedding;
+      } catch (firstErr) {
+        // If we got a 404 it means this Ollama version doesn't have /api/embed yet
+        if (firstErr.response?.status === 404) {
+          const { data } = await axios.post(`${OLLAMA_BASE_URL}/api/embeddings`, {
+            model,
+            prompt: text, // older endpoint uses "prompt", not "input"
+          });
+          // /api/embeddings returns { embedding: [...] }
+          vector = data.embedding;
+        } else {
+          throw firstErr;
+        }
+      }
+      if (!vector) throw new Error("Ollama returned an empty embedding vector");
       results.push(vector);
     } catch (err) {
       throw new ApiError(
         502,
-        `Failed to generate embedding via Ollama. Is the Ollama server running and reachable at ${OLLAMA_BASE_URL}? (${err.message})`
+        `Failed to generate embedding via Ollama at ${OLLAMA_BASE_URL}. ` +
+          `Check that the model "${model}" is pulled (run: ollama pull ${model}). ` +
+          `Error: ${err.message}`
       );
     }
   }

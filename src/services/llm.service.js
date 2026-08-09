@@ -68,9 +68,16 @@ const streamChatCompletion = async ({ llmConfig, messages, onToken }) => {
 const streamOllama = async ({ model, messages, temperature, onToken }) => {
   let fullText = "";
   try {
+    // Ollama's /api/chat endpoint (available since v0.1.14).
+    // If you get a 404 here, your Ollama is very old — run `ollama update`.
     const response = await axios.post(
       `${OLLAMA_BASE_URL}/api/chat`,
-      { model, messages, stream: true, options: { temperature } },
+      {
+        model,
+        messages,
+        stream: true,
+        options: { temperature: temperature ?? 0.7 },
+      },
       { responseType: "stream" }
     );
 
@@ -95,9 +102,19 @@ const streamOllama = async ({ model, messages, temperature, onToken }) => {
       response.data.on("error", reject);
     });
   } catch (err) {
+    const status = err.response?.status;
+    if (status === 404) {
+      throw new ApiError(
+        502,
+        `Ollama returned 404 for /api/chat. ` +
+          `Make sure the model "${model}" is pulled (run: ollama pull ${model}), ` +
+          `and that your Ollama version supports /api/chat (v0.1.14+). ` +
+          `Run \`ollama --version\` to check.`
+      );
+    }
     throw new ApiError(
       502,
-      `Failed to reach Ollama server at ${OLLAMA_BASE_URL}. Is it running? (${err.message})`
+      `Failed to reach Ollama at ${OLLAMA_BASE_URL}. Is it running? (${err.message})`
     );
   }
   return fullText;
