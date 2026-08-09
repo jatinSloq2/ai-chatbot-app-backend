@@ -37,6 +37,7 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
 
   res.setHeader("Content-Type", "application/javascript");
   res.setHeader("Cache-Control", "public, max-age=300"); // 5 min cache, config changes propagate reasonably fast
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin"); // allow loading from any embedding site
   res.send(script);
 });
 
