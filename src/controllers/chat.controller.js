@@ -7,17 +7,40 @@ const botService = require("../services/bot.service");
 const Bot = require("../models/Bot");
 const { nanoid } = require("nanoid");
 
-// POST /api/v1/chat  (auth: bot public key)
+// Shared SSE setup — sets all required headers including explicit CORS headers
+// so the stream works from any third-party domain (the widget's host site).
+function setupSSE(req, res) {
+  const origin = req.headers.origin || "*";
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no"); // disable nginx buffering if proxied
+  // Explicit CORS headers on SSE — fetch() with EventSource-style streaming
+  // requires these on the actual response, not just the pre-flight.
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-api-key");
+  res.setHeader("Vary", "Origin");
+  if (res.flushHeaders) res.flushHeaders();
+}
+
+function sendEvent(res, event, data) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+// POST /api/v1/chat  (auth: bot public key via x-api-key header)
 // body: { message, sessionId? }
 // Streams the response via Server-Sent Events.
 const chat = asyncHandler(async (req, res) => {
   const bot = req.bot;
   const { message } = req.body;
+  // sessionId comes from the widget's localStorage (persisted across page loads).
+  // If null/missing, we generate a fresh one and send it back in the "session" event
+  // so the widget can save it.
   let { sessionId } = req.body;
 
   if (!message?.trim()) throw new ApiError(400, "message is required");
 
-  // Enforce the monthly message quota for this bot's plan
   await botService.checkAndIncrementMessageUsage(bot);
 
   if (!sessionId) sessionId = nanoid(24);
@@ -27,29 +50,19 @@ const chat = asyncHandler(async (req, res) => {
     conversation = await Conversation.create({ bot: bot._id, sessionId, messages: [] });
   }
 
-  // --- Set up SSE ---
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
+  setupSSE(req, res);
   res.setHeader("X-Session-Id", sessionId);
-  res.flushHeaders?.();
 
-  const sendEvent = (event, data) => {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
-
-  sendEvent("session", { sessionId });
+  // Always send the session event FIRST so the widget captures and saves the sessionId
+  sendEvent(res, "session", { sessionId });
 
   try {
-    // 1. Retrieve relevant chunks from the bot's knowledge base
     const relevantChunks = await ragService.retrieveRelevantChunks(
       bot._id,
       message,
       bot.embeddingConfig
     );
 
-    // 2. Build the prompt with retrieved context + recent conversation history
     const recentHistory = conversation.messages.slice(-10).map((m) => ({
       role: m.role,
       content: m.content,
@@ -62,31 +75,26 @@ const chat = asyncHandler(async (req, res) => {
       userMessage: message,
     });
 
-    // 3. Stream the LLM response token-by-token to the client
     const fullResponse = await llmService.streamChatCompletion({
       llmConfig: bot.llmConfig,
       messages,
-      onToken: (token) => sendEvent("token", { token }),
+      onToken: (token) => sendEvent(res, "token", { token }),
     });
 
-    // 4. Persist the exchange
     conversation.messages.push({ role: "user", content: message });
     conversation.messages.push({ role: "assistant", content: fullResponse });
     await conversation.save();
 
-    sendEvent("done", { fullResponse });
+    sendEvent(res, "done", { fullResponse });
   } catch (err) {
-    sendEvent("error", { message: err.message || "Something went wrong" });
+    sendEvent(res, "error", { message: err.message || "Something went wrong" });
   } finally {
     res.end();
   }
 });
 
 // POST /api/bots/:id/test-chat  (auth: user JWT, owner only)
-// Same RAG pipeline as the public chat endpoint, but authenticated as the bot's
-// OWNER via the dashboard, and does NOT count against the plan's monthly
-// message quota — this is for testing the bot while building it, not for
-// production traffic (that path is /api/v1/chat with the public key).
+// Does NOT count against message quota — for dashboard testing only.
 const testChat = asyncHandler(async (req, res) => {
   const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
   if (!bot) throw new ApiError(404, "Bot not found");
@@ -94,15 +102,7 @@ const testChat = asyncHandler(async (req, res) => {
   const { message } = req.body;
   if (!message?.trim()) throw new ApiError(400, "message is required");
 
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.flushHeaders?.();
-
-  const sendEvent = (event, data) => {
-    res.write(`event: ${event}\n`);
-    res.write(`data: ${JSON.stringify(data)}\n\n`);
-  };
+  setupSSE(req, res);
 
   try {
     const relevantChunks = await ragService.retrieveRelevantChunks(
@@ -111,9 +111,12 @@ const testChat = asyncHandler(async (req, res) => {
       bot.embeddingConfig
     );
 
-    sendEvent("retrieved", {
+    sendEvent(res, "retrieved", {
       chunkCount: relevantChunks.length,
-      chunks: relevantChunks.map((c) => ({ content: c.content.slice(0, 200), score: c.score })),
+      chunks: relevantChunks.map((c) => ({
+        content: c.content.slice(0, 200),
+        score: c.score,
+      })),
     });
 
     const messages = ragService.buildRagMessages({
@@ -126,12 +129,12 @@ const testChat = asyncHandler(async (req, res) => {
     const fullResponse = await llmService.streamChatCompletion({
       llmConfig: bot.llmConfig,
       messages,
-      onToken: (token) => sendEvent("token", { token }),
+      onToken: (token) => sendEvent(res, "token", { token }),
     });
 
-    sendEvent("done", { fullResponse });
+    sendEvent(res, "done", { fullResponse });
   } catch (err) {
-    sendEvent("error", { message: err.message || "Something went wrong" });
+    sendEvent(res, "error", { message: err.message || "Something went wrong" });
   } finally {
     res.end();
   }
