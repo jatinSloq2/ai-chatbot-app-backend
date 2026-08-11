@@ -23,6 +23,7 @@ const sanitizeBot = (bot) => ({
     lockedDimension: bot.embeddingConfig.lockedDimension,
   },
   widgetConfig: bot.widgetConfig,
+  leadConfig: bot.leadConfig,
   isActive: bot.isActive,
   documentCount: bot.documentCount,
   messagesThisMonth: bot.messagesThisMonth,
@@ -62,7 +63,7 @@ const getBot = asyncHandler(async (req, res) => {
 
 // PATCH /api/bots/:id
 const updateBot = asyncHandler(async (req, res) => {
-  const { name, description, systemPrompt, allowedDomains, widgetConfig, isActive } = req.body;
+  const { name, description, systemPrompt, allowedDomains, widgetConfig, leadConfig, isActive } = req.body;
 
   const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
   if (!bot) throw new ApiError(404, "Bot not found");
@@ -73,6 +74,12 @@ const updateBot = asyncHandler(async (req, res) => {
   if (allowedDomains !== undefined) bot.allowedDomains = allowedDomains;
   if (isActive !== undefined) bot.isActive = isActive;
   if (widgetConfig !== undefined) bot.widgetConfig = { ...bot.widgetConfig, ...widgetConfig };
+  if (leadConfig !== undefined) {
+    // Enforce "only one identifier at a time" even if the client sends something odd
+    const merged = { ...bot.leadConfig, ...leadConfig };
+    if (!["none", "email", "phone"].includes(merged.identifierType)) merged.identifierType = "none";
+    bot.leadConfig = merged;
+  }
 
   await bot.save();
   res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });

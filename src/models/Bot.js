@@ -53,6 +53,23 @@ const botSchema = new mongoose.Schema(
       position: { type: String, enum: ["bottom-right", "bottom-left"], default: "bottom-right" },
     },
 
+    // --- Pre-chat lead capture (widget) ---
+    // Controls the form shown to a visitor before they can start chatting.
+    leadConfig: {
+      enabled: { type: Boolean, default: false }, // show the pre-chat form at all
+
+      collectName: { type: Boolean, default: true },
+      nameRequired: { type: Boolean, default: false },
+
+      // Only ONE identifier is collected at a time — email OR phone, never both.
+      identifierType: { type: String, enum: ["none", "email", "phone"], default: "email" },
+      identifierRequired: { type: Boolean, default: true },
+
+      // If true, the visitor must enter an OTP (sent by email or SMS,
+      // matching identifierType) before the chat unlocks.
+      verifyIdentifier: { type: Boolean, default: false },
+    },
+
     isActive: { type: Boolean, default: true },
 
     // Denormalized counters for quick limit checks (avoid COUNT queries on every request)

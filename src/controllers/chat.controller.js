@@ -41,7 +41,7 @@ const chat = asyncHandler(async (req, res) => {
 
   let conversation = await Conversation.findOne({ bot: bot._id, sessionId });
   if (!conversation) {
-    conversation = await Conversation.create({ bot: bot._id, sessionId, messages: [] });
+    conversation = await Conversation.create({ bot: bot._id, sessionId, type: "widget", messages: [] });
   }
 
   setupSSE(req, res, { "X-Session-Id": sessionId });
@@ -141,9 +141,18 @@ const testChat = asyncHandler(async (req, res) => {
   if (!bot) throw new ApiError(404, "Bot not found");
 
   const { message } = req.body;
+  let { sessionId } = req.body;
   if (!message?.trim()) throw new ApiError(400, "message is required");
 
-  setupSSE(req, res);
+  if (!sessionId) sessionId = nanoid(24);
+
+  let conversation = await Conversation.findOne({ bot: bot._id, sessionId, type: "test" });
+  if (!conversation) {
+    conversation = await Conversation.create({ bot: bot._id, sessionId, type: "test", messages: [] });
+  }
+
+  setupSSE(req, res, { "X-Session-Id": sessionId });
+  sendEvent(res, "session", { sessionId });
 
   const totalStart = Date.now();
   let embeddingMs = null;
@@ -175,10 +184,14 @@ const testChat = asyncHandler(async (req, res) => {
     });
 
     const retrStart = Date.now();
+    const recentHistory = conversation.messages.slice(-10).map((m) => ({
+      role: m.role,
+      content: m.content,
+    }));
     const messages = ragService.buildRagMessages({
       systemPrompt: bot.systemPrompt,
       relevantChunks,
-      history: [],
+      history: recentHistory,
       userMessage: message,
     });
     retrievalMs = Date.now() - retrStart;
@@ -190,6 +203,11 @@ const testChat = asyncHandler(async (req, res) => {
       onToken: (token) => sendEvent(res, "token", { token }),
     });
     llmMs = Date.now() - llmStart;
+
+    // Save conversation (test chats are stored just like widget chats)
+    conversation.messages.push({ role: "user", content: message });
+    conversation.messages.push({ role: "assistant", content: fullResponse });
+    await conversation.save();
 
     sendEvent(res, "done", { fullResponse });
   } catch (err) {

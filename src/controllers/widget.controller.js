@@ -10,6 +10,7 @@ const getWidgetConfig = asyncHandler(async (req, res) => {
     data: {
       name: bot.name,
       widgetConfig: bot.widgetConfig,
+      leadConfig: bot.leadConfig,
       isActive: bot.isActive,
     },
   });

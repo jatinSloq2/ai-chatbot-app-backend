@@ -32,6 +32,21 @@ const sendOtpEmail = async (to, otp, purpose) => {
   await sendEmail({ to, subject: heading, html });
 };
 
+const sendLeadVerificationEmail = async (to, otp, botName) => {
+  const html = `
+    <div style="font-family: sans-serif; max-width: 480px; margin: auto;">
+      <h2>Verify your email</h2>
+      <p>Use the code below to verify your email for <strong>${botName}</strong>'s chat.</p>
+      <div style="font-size: 32px; font-weight: bold; letter-spacing: 8px; margin: 24px 0;">
+        ${otp}
+      </div>
+      <p>This code expires in ${process.env.OTP_EXPIRES_MINUTES || 10} minutes.</p>
+      <p>If you didn't request this, you can safely ignore this email.</p>
+    </div>
+  `;
+  await sendEmail({ to, subject: `Your ${botName} verification code`, html });
+};
+
 const sendPaymentSuccessEmail = async (to, { planName, amountDisplay, endDate }) => {
   const html = `
     <div style="font-family: sans-serif; max-width: 480px; margin: auto;">
@@ -103,6 +118,7 @@ const sendPasswordChangedEmail = async (to) => {
 module.exports = {
   sendEmail,
   sendOtpEmail,
+  sendLeadVerificationEmail,
   sendPaymentSuccessEmail,
   sendPaymentFailedEmail,
   sendSubscriptionExpiringEmail,
