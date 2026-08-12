@@ -50,6 +50,15 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
     height: parseInt(req.query.height) || 520,
     width: parseInt(req.query.width) || 360,
     botName: bot.name,
+    // Pre-chat lead capture form settings (name/email/phone + verification)
+    leadConfig: bot.leadConfig || {
+      enabled: false,
+      collectName: true,
+      nameRequired: false,
+      identifierType: "email",
+      identifierRequired: true,
+      verifyIdentifier: false,
+    },
   };
 
   const script = buildWidgetScript({ apiBaseUrl, publicKey, config });
@@ -195,8 +204,51 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     "flex-shrink:0;transition:opacity .15s;opacity:.5;}",
     "#jb-send.active{opacity:1;}",
     "#jb-send svg{width:16px;height:16px;fill:#fff;}",
+
+    // pre-chat lead form
+    "#jb-lead{display:none;flex:1;overflow-y:auto;padding:20px 16px;flex-direction:column;",
+    "gap:12px;background:" + colors.bgMsgs + ";}",
+    "#jb-win.jb-mode-lead #jb-lead{display:flex;}",
+    "#jb-win.jb-mode-lead #jb-msgs,#jb-win.jb-mode-lead #jb-input-row,#jb-win.jb-mode-lead #jb-powered{display:none;}",
+    "#jb-lead-title{font-size:14px;font-weight:600;color:" + colors.text + ";}",
+    "#jb-lead-sub{font-size:12px;color:" + colors.textMuted + ";margin-bottom:4px;}",
+    "#jb-lead-formpanel{display:flex;flex-direction:column;gap:10px;}",
+    "#jb-lead input{width:100%;box-sizing:border-box;background:" + colors.inputBg + ";",
+    "color:" + colors.inputText + ";border:1px solid " + colors.border + ";border-radius:10px;",
+    "padding:10px 12px;font-size:14px;outline:none;font-family:inherit;transition:border-color .15s;}",
+    "#jb-lead input:focus{border-color:" + CONFIG.primaryColor + ";}",
+    "#jb-lead-err,#jb-lead-otp-err{font-size:12px;color:#e11d48;min-height:14px;}",
+    "#jb-lead button{background:" + CONFIG.primaryColor + ";color:#fff;border:none;border-radius:10px;",
+    "padding:10px 14px;font-size:14px;font-weight:600;cursor:pointer;transition:opacity .15s;font-family:inherit;}",
+    "#jb-lead button:disabled{opacity:.6;cursor:default;}",
+    "#jb-lead-resend{background:none!important;color:" + CONFIG.primaryColor + "!important;",
+    "font-weight:500!important;padding:0!important;text-decoration:underline;align-self:flex-start;}",
+    "#jb-lead-otp{display:none;flex-direction:column;gap:10px;}",
+    "#jb-lead-otp.show{display:flex;}",
+    "#jb-lead-otp-msg{font-size:12px;color:" + colors.textMuted + ";}",
   ].join("");
   document.head.appendChild(style);
+
+  // ---------- lead capture state ----------
+  var LEAD = CONFIG.leadConfig || { enabled: false };
+  var LEAD_DONE_KEY = "jb_lead_done_" + PK;
+
+  function genId() {
+    return "xxxxxxxxxxxx".replace(/x/g, function () {
+      return Math.floor(Math.random() * 16).toString(16);
+    }) + Date.now().toString(36);
+  }
+
+  // sessionId is created up-front (not just on first message) so the
+  // pre-chat lead form can be tied to the same conversation the visitor
+  // ends up chatting in.
+  var sessionId = storageGet(SK);
+  if (!sessionId) {
+    sessionId = genId();
+    storageSet(SK, sessionId);
+  }
+
+  var leadDone = !LEAD.enabled || storageGet(LEAD_DONE_KEY) === "1";
 
   // ---------- build DOM ----------
   // Bubble button
@@ -238,8 +290,43 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
       '</button>' +
     '</div>';
 
+  win.className = leadDone ? "jb-mode-chat" : "jb-mode-lead";
+
   document.body.appendChild(win);
   document.body.appendChild(bubble);
+
+  // ---------- pre-chat lead form ----------
+  var leadHtml =
+    '<div id="jb-lead-title">' + esc(LEAD.title || "Before we start") + '</div>' +
+    '<div id="jb-lead-sub">' + esc(LEAD.subtitle || "Tell us a bit about you so we can help.") + '</div>' +
+    '<div id="jb-lead-formpanel">';
+  if (LEAD.collectName) {
+    leadHtml += '<input id="jb-lead-name" type="text" placeholder="Your name' +
+      (LEAD.nameRequired ? '' : ' (optional)') + '" />';
+  }
+  if (LEAD.identifierType === "email") {
+    leadHtml += '<input id="jb-lead-id" type="email" placeholder="Email address' +
+      (LEAD.identifierRequired ? '' : ' (optional)') + '" />';
+  } else if (LEAD.identifierType === "phone") {
+    leadHtml += '<input id="jb-lead-id" type="tel" placeholder="Phone number' +
+      (LEAD.identifierRequired ? '' : ' (optional)') + '" />';
+  }
+  leadHtml +=
+    '<div id="jb-lead-err"></div>' +
+    '<button id="jb-lead-submit" type="button">Continue</button>' +
+    '</div>' +
+    '<div id="jb-lead-otp">' +
+      '<div id="jb-lead-otp-msg"></div>' +
+      '<input id="jb-lead-otp-input" type="text" inputmode="numeric" placeholder="Enter verification code" />' +
+      '<div id="jb-lead-otp-err"></div>' +
+      '<button id="jb-lead-verify" type="button">Verify &amp; continue</button>' +
+      '<button id="jb-lead-resend" type="button">Resend code</button>' +
+    '</div>';
+
+  var leadEl = document.createElement("div");
+  leadEl.id = "jb-lead";
+  leadEl.innerHTML = leadHtml;
+  win.appendChild(leadEl);
 
   var msgsEl   = document.getElementById("jb-msgs");
   var inputEl  = document.getElementById("jb-input");
@@ -247,6 +334,142 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   var closeBtn = document.getElementById("jb-head-close");
   var isOpen   = false;
   var isStreaming = false;
+
+  var leadNameEl    = document.getElementById("jb-lead-name");
+  var leadIdEl      = document.getElementById("jb-lead-id");
+  var leadErrEl     = document.getElementById("jb-lead-err");
+  var leadSubmitBtn = document.getElementById("jb-lead-submit");
+  var leadFormPanel = document.getElementById("jb-lead-formpanel");
+  var leadOtpPanel  = document.getElementById("jb-lead-otp");
+  var leadOtpMsg    = document.getElementById("jb-lead-otp-msg");
+  var leadOtpInput  = document.getElementById("jb-lead-otp-input");
+  var leadOtpErr    = document.getElementById("jb-lead-otp-err");
+  var leadVerifyBtn = document.getElementById("jb-lead-verify");
+  var leadResendBtn = document.getElementById("jb-lead-resend");
+  var leadTarget    = null; // { type: "email"|"phone", value: "..." }
+
+  function showWelcome() {
+    if (msgsEl.children.length === 0 && CONFIG.welcomeMessage) {
+      addTimestamp();
+      addMessage("bot", CONFIG.welcomeMessage);
+    }
+  }
+
+  function leadComplete() {
+    storageSet(LEAD_DONE_KEY, "1");
+    leadDone = true;
+    win.classList.remove("jb-mode-lead");
+    win.classList.add("jb-mode-chat");
+    showWelcome();
+    setTimeout(function () { inputEl.focus(); }, 100);
+  }
+
+  function leadSubmit() {
+    var name  = leadNameEl ? leadNameEl.value.trim() : "";
+    var idVal = leadIdEl ? leadIdEl.value.trim() : "";
+
+    if (LEAD.collectName && LEAD.nameRequired && !name) {
+      leadErrEl.textContent = "Please enter your name.";
+      return;
+    }
+    if (LEAD.identifierType !== "none" && LEAD.identifierRequired && !idVal) {
+      leadErrEl.textContent = LEAD.identifierType === "email"
+        ? "Please enter your email." : "Please enter your phone number.";
+      return;
+    }
+
+    leadErrEl.textContent = "";
+    leadSubmitBtn.disabled = true;
+    leadSubmitBtn.textContent = "Please wait...";
+
+    var payload = { sessionId: sessionId };
+    if (LEAD.collectName && name) payload.name = name;
+    if (LEAD.identifierType === "email" && idVal) payload.email = idVal;
+    if (LEAD.identifierType === "phone" && idVal) payload.phone = idVal;
+
+    fetch(API_BASE + "/api/v1/lead/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": PK },
+      body: JSON.stringify(payload)
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || "Something went wrong"); });
+      return r.json();
+    }).then(function () {
+      if (LEAD.verifyIdentifier && LEAD.identifierType !== "none" && idVal) {
+        leadTarget = { type: LEAD.identifierType, value: idVal };
+        return fetch(API_BASE + "/api/v1/lead/send-otp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-api-key": PK },
+          body: JSON.stringify({ sessionId: sessionId, type: LEAD.identifierType, target: idVal })
+        }).then(function (r) {
+          if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || "Could not send code"); });
+          return r.json();
+        }).then(function () {
+          leadFormPanel.style.display = "none";
+          leadOtpPanel.classList.add("show");
+          leadOtpMsg.textContent = "We sent a verification code to " + idVal + ".";
+          leadOtpInput.focus();
+        });
+      }
+      leadComplete();
+    }).catch(function (err) {
+      leadErrEl.textContent = err.message || "Something went wrong. Please try again.";
+      leadSubmitBtn.disabled = false;
+      leadSubmitBtn.textContent = "Continue";
+    });
+  }
+
+  function leadVerify() {
+    var otp = leadOtpInput.value.trim();
+    if (!otp) { leadOtpErr.textContent = "Please enter the code."; return; }
+    leadOtpErr.textContent = "";
+    leadVerifyBtn.disabled = true;
+    leadVerifyBtn.textContent = "Verifying...";
+
+    fetch(API_BASE + "/api/v1/lead/verify-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": PK },
+      body: JSON.stringify({ sessionId: sessionId, type: leadTarget.type, otp: otp })
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || "Invalid code"); });
+      return r.json();
+    }).then(function () {
+      leadComplete();
+    }).catch(function (err) {
+      leadOtpErr.textContent = err.message || "Invalid code. Please try again.";
+      leadVerifyBtn.disabled = false;
+      leadVerifyBtn.textContent = "Verify & continue";
+    });
+  }
+
+  function leadResend() {
+    if (!leadTarget) return;
+    leadResendBtn.disabled = true;
+    fetch(API_BASE + "/api/v1/lead/send-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": PK },
+      body: JSON.stringify({ sessionId: sessionId, type: leadTarget.type, target: leadTarget.value })
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || "Could not resend code"); });
+      leadOtpErr.textContent = "";
+      leadOtpMsg.textContent = "A new code was sent to " + leadTarget.value + ".";
+    }).catch(function (err) {
+      leadOtpErr.textContent = err.message || "Could not resend code.";
+    }).then(function () { leadResendBtn.disabled = false; });
+  }
+
+  if (leadSubmitBtn) leadSubmitBtn.addEventListener("click", leadSubmit);
+  if (leadVerifyBtn) leadVerifyBtn.addEventListener("click", leadVerify);
+  if (leadResendBtn) leadResendBtn.addEventListener("click", leadResend);
+  if (leadNameEl) leadNameEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); leadSubmit(); }
+  });
+  if (leadIdEl) leadIdEl.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); leadSubmit(); }
+  });
+  if (leadOtpInput) leadOtpInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); leadVerify(); }
+  });
 
   // ---------- auto-grow textarea ----------
   inputEl.addEventListener("input", function () {
@@ -261,11 +484,15 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     win.classList.add("open");
     bubble.classList.add("open");
     bubble.setAttribute("aria-label", "Close chat");
-    if (msgsEl.children.length === 0 && CONFIG.welcomeMessage) {
-      addTimestamp();
-      addMessage("bot", CONFIG.welcomeMessage);
+    if (leadDone) {
+      showWelcome();
+      setTimeout(function () { inputEl.focus(); }, 100);
+    } else {
+      setTimeout(function () {
+        if (leadNameEl) leadNameEl.focus();
+        else if (leadIdEl) leadIdEl.focus();
+      }, 100);
     }
-    setTimeout(function () { inputEl.focus(); }, 100);
   }
 
   function closeChat() {
@@ -325,7 +552,6 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     showTyping();
     isStreaming = true;
 
-    var sessionId = storageGet(SK);
     var botEl = null;
 
     fetch(API_BASE + "/api/v1/chat", {
