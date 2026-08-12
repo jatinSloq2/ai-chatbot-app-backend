@@ -70,6 +70,17 @@ const botSchema = new mongoose.Schema(
       verifyIdentifier: { type: Boolean, default: false },
     },
 
+    // --- Human agent handover (Agent System) ---
+    // Which agents/teams can be handed a conversation on this bot, and
+    // whether handover is offered at all. The actual handover trigger logic
+    // (context-fails detection, assignment engine, etc.) is a later phase —
+    // this is just the config surface + ownership relationships.
+    assignedAgents: [{ type: mongoose.Schema.Types.ObjectId, ref: "Agent" }],
+    assignedTeams: [{ type: mongoose.Schema.Types.ObjectId, ref: "Team" }],
+    agentConfig: {
+      assignEnabled: { type: Boolean, default: false }, // "agents_assign_enabled"
+    },
+
     isActive: { type: Boolean, default: true },
 
     // Denormalized counters for quick limit checks (avoid COUNT queries on every request)

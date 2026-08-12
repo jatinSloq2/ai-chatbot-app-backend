@@ -28,6 +28,11 @@ const planSchema = new mongoose.Schema(
         type: [String],
         default: ["ollama"], // paid plans can add "openai", "anthropic" as platform-provided
       },
+
+      // --- Agent System limits ---
+      maxAgents: { type: Number, required: true, default: 0 }, // 0 = no agent seats on this plan
+      maxTeams: { type: Number, required: true, default: 0 },
+      maxAgentsPerTeam: { type: Number, required: true, default: 0 },
     },
 
     isActive: { type: Boolean, default: true },

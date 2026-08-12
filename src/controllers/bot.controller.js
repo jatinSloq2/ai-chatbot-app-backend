@@ -24,6 +24,9 @@ const sanitizeBot = (bot) => ({
   },
   widgetConfig: bot.widgetConfig,
   leadConfig: bot.leadConfig,
+  assignedAgents: bot.assignedAgents,
+  assignedTeams: bot.assignedTeams,
+  agentConfig: bot.agentConfig,
   isActive: bot.isActive,
   documentCount: bot.documentCount,
   messagesThisMonth: bot.messagesThisMonth,
@@ -125,6 +128,41 @@ const setModelConfig = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
 });
 
+// POST /api/bots/:id/agent-config
+// body: { assignEnabled?, assignedAgents?: string[], assignedTeams?: string[] }
+// Links agents/teams to this bot for human handover, and toggles whether
+// handover is offered at all. Ownership of every agent/team ID is verified
+// against req.user so a bot can't be pointed at someone else's agents.
+const setAgentConfig = asyncHandler(async (req, res) => {
+  const { assignEnabled, assignedAgents, assignedTeams } = req.body;
+
+  const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
+  if (!bot) throw new ApiError(404, "Bot not found");
+
+  if (assignedAgents !== undefined) {
+    if (assignedAgents.length) {
+      const Agent = require("../models/Agent");
+      const count = await Agent.countDocuments({ _id: { $in: assignedAgents }, owner: req.user._id });
+      if (count !== assignedAgents.length) throw new ApiError(400, "One or more agents were not found in your account");
+    }
+    bot.assignedAgents = assignedAgents;
+  }
+
+  if (assignedTeams !== undefined) {
+    if (assignedTeams.length) {
+      const Team = require("../models/Team");
+      const count = await Team.countDocuments({ _id: { $in: assignedTeams }, owner: req.user._id });
+      if (count !== assignedTeams.length) throw new ApiError(400, "One or more teams were not found in your account");
+    }
+    bot.assignedTeams = assignedTeams;
+  }
+
+  if (assignEnabled !== undefined) bot.agentConfig.assignEnabled = assignEnabled;
+
+  await bot.save();
+  res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
+});
+
 module.exports = {
   createBot,
   listBots,
@@ -133,4 +171,5 @@ module.exports = {
   deleteBot,
   regenerateKey,
   setModelConfig,
+  setAgentConfig,
 };

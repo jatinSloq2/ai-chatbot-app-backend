@@ -1,9 +1,10 @@
 const admin = require("firebase-admin");
 const logger = require("../utils/logger");
 
-// Firebase Admin is used ONLY to verify the ID token that the frontend gets
-// after a user signs in with Google via Firebase Auth (client SDK).
-// The frontend does the actual Google sign-in popup; we just verify the token here.
+// Firebase Admin is used to verify the ID token that the frontend gets after
+// a user signs in with Google via Firebase Auth (client SDK), AND to send
+// FCM push notifications to agents (see notification.service.js). Both use
+// the same credential/app instance.
 
 if (!admin.apps.length) {
   try {
