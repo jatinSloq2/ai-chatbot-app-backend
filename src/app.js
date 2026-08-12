@@ -28,7 +28,8 @@ app.use((req, res, next) => {
   const isWidgetRoute =
     req.path === "/widget.js" ||
     req.path.startsWith("/api/v1/chat") ||
-    req.path.startsWith("/api/v1/widget");
+    req.path.startsWith("/api/v1/widget") || 
+    req.path.startsWith("/api/v1/lead");
 
   if (isWidgetRoute) {
     // Widget routes: open to any origin, no cookies
