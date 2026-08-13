@@ -12,6 +12,7 @@ const modelRoutes = require("./model.routes");
 const agentRoutes = require("./agent.routes");
 const teamRoutes = require("./team.routes");
 const agentAuthRoutes = require("./agentAuth.routes");
+const leadsRoutes = require("./leads.routes");
 
 router.use("/auth", authRoutes);
 router.use("/bots", botRoutes);
@@ -23,6 +24,7 @@ router.use("/models", modelRoutes);
 router.use("/agents", agentRoutes); // owner-side agent management (dashboard)
 router.use("/teams", teamRoutes); // owner-side team management (dashboard)
 router.use("/agent-auth", agentAuthRoutes); // agent-facing login + panel APIs
+router.use("/leads", leadsRoutes); // owner-side lead aggregation across bots
 router.use("/v1", publicRoutes); // public developer-facing API (secret/public key auth, not user JWT)
 
 module.exports = router;

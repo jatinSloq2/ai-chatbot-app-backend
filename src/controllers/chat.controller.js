@@ -4,6 +4,7 @@ const Conversation = require("../models/Conversation");
 const ragService = require("../services/rag.service");
 const llmService = require("../services/llm.service");
 const botService = require("../services/bot.service");
+const handoverService = require("../services/handover.service");
 const Bot = require("../models/Bot");
 const { nanoid } = require("nanoid");
 const analyticsService = require("../services/analytics.service");
@@ -34,9 +35,6 @@ const chat = asyncHandler(async (req, res) => {
 
   if (!message?.trim()) throw new ApiError(400, "message is required");
 
-  // --- Plan limit check + atomic counter increment ---
-  const plan = await botService.checkAndIncrementMessageUsage(bot);
-
   if (!sessionId) sessionId = nanoid(24);
 
   let conversation = await Conversation.findOne({ bot: bot._id, sessionId });
@@ -46,6 +44,19 @@ const chat = asyncHandler(async (req, res) => {
 
   setupSSE(req, res, { "X-Session-Id": sessionId });
   sendEvent(res, "session", { sessionId });
+
+  // A human is (or is about to be) handling this conversation — route the
+  // message straight into the transcript instead of calling the AI. No
+  // quota usage here; the widget switches to polling for the agent's reply.
+  if (conversation.handover.status === "requested" || conversation.handover.status === "assigned") {
+    await handoverService.appendVisitorMessage(conversation, message);
+    sendEvent(res, "handover", { status: conversation.handover.status });
+    res.end();
+    return;
+  }
+
+  // --- Plan limit check + atomic counter increment (AI path only) ---
+  const plan = await botService.checkAndIncrementMessageUsage(bot);
 
   const totalStart = Date.now();
   let embeddingMs = null;
@@ -246,4 +257,26 @@ const testChat = asyncHandler(async (req, res) => {
   }
 });
 
-module.exports = { chat, testChat };
+// POST /api/v1/chat/request-handover  (auth: bot public key)
+// body: { sessionId }
+const requestHandover = asyncHandler(async (req, res) => {
+  const bot = req.bot;
+  const { sessionId } = req.body;
+  if (!sessionId) throw new ApiError(400, "sessionId is required");
+
+  await handoverService.requestHandover(bot, sessionId);
+  res.status(200).json({ success: true, message: "We're connecting you with an agent" });
+});
+
+// GET /api/v1/chat/poll?sessionId=...&since=ISO_DATE  (auth: bot public key)
+// Widget polls this while handover is active to pick up agent replies.
+const pollChat = asyncHandler(async (req, res) => {
+  const bot = req.bot;
+  const { sessionId, since } = req.query;
+  if (!sessionId) throw new ApiError(400, "sessionId is required");
+
+  const result = await handoverService.pollUpdates(bot, sessionId, since);
+  res.status(200).json({ success: true, data: result });
+});
+
+module.exports = { chat, testChat, requestHandover, pollChat };

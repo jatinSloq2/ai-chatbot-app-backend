@@ -97,7 +97,7 @@ const login = async ({ email, password }) => {
   if (!agent.isActive) throw new ApiError(403, "This agent account has been disabled. Contact your admin.");
 
   const isMatch = await bcrypt.compare(password, agent.password);
-  if (!isMatch) throw new ApiError(401, "Invalid email or password");
+  if (!isMatch) throw new ApiError(401, "Invalid password");
 
   return agent;
 };

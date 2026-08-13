@@ -2,6 +2,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const agentService = require("../services/agent.service");
 const notificationService = require("../services/notification.service");
+const handoverService = require("../services/handover.service");
 const Agent = require("../models/Agent");
 const {
   verifyRefreshToken,
@@ -169,6 +170,65 @@ const sendTestNotification = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, message: "Test notification sent" });
 });
 
+// --- Handover (human takeover of a conversation) ---
+
+const sanitizeConversation = (c) => ({
+  id: c._id,
+  botId: c.bot?._id || c.bot,
+  botName: c.bot?.name || null,
+  sessionId: c.sessionId,
+  visitor: c.visitor,
+  messages: c.messages,
+  handover: {
+    status: c.handover.status,
+    requestedAt: c.handover.requestedAt,
+    assignedAt: c.handover.assignedAt,
+    resolvedAt: c.handover.resolvedAt,
+  },
+  createdAt: c.createdAt,
+  updatedAt: c.updatedAt,
+});
+
+// GET /api/agent-auth/handovers/pending — the pool of unclaimed chats this
+// agent is eligible to accept.
+const listPendingHandovers = asyncHandler(async (req, res) => {
+  const conversations = await handoverService.listPending(req.agent._id);
+  res.status(200).json({ success: true, data: { conversations: conversations.map(sanitizeConversation) } });
+});
+
+// GET /api/agent-auth/handovers/assigned — chats currently assigned to me.
+const listMyHandovers = asyncHandler(async (req, res) => {
+  const conversations = await handoverService.listAssignedToAgent(req.agent._id);
+  res.status(200).json({ success: true, data: { conversations: conversations.map(sanitizeConversation) } });
+});
+
+// POST /api/agent-auth/handovers/:conversationId/accept
+const acceptHandover = asyncHandler(async (req, res) => {
+  const conversation = await handoverService.acceptHandover(req.agent._id, req.params.conversationId);
+  res.status(200).json({ success: true, data: { conversation: sanitizeConversation(conversation) } });
+});
+
+// GET /api/agent-auth/conversations/:conversationId — single conversation,
+// polled by the agent panel while a chat is active.
+const getMyConversation = asyncHandler(async (req, res) => {
+  const conversation = await handoverService.getMyConversation(req.agent._id, req.params.conversationId);
+  res.status(200).json({ success: true, data: { conversation: sanitizeConversation(conversation) } });
+});
+
+// POST /api/agent-auth/conversations/:conversationId/message  body: { message }
+const sendAgentMessage = asyncHandler(async (req, res) => {
+  const { message } = req.body;
+  if (!message?.trim()) throw new ApiError(400, "message is required");
+  const conversation = await handoverService.sendAgentMessage(req.agent, req.params.conversationId, message);
+  res.status(200).json({ success: true, data: { conversation: sanitizeConversation(conversation) } });
+});
+
+// POST /api/agent-auth/conversations/:conversationId/resolve
+const resolveConversation = asyncHandler(async (req, res) => {
+  const conversation = await handoverService.resolveHandover(req.agent._id, req.params.conversationId);
+  res.status(200).json({ success: true, data: { conversation: sanitizeConversation(conversation) } });
+});
+
 module.exports = {
   login,
   refreshToken,
@@ -181,4 +241,10 @@ module.exports = {
   markNotificationRead,
   markAllNotificationsRead,
   sendTestNotification,
+  listPendingHandovers,
+  listMyHandovers,
+  acceptHandover,
+  getMyConversation,
+  sendAgentMessage,
+  resolveConversation,
 };

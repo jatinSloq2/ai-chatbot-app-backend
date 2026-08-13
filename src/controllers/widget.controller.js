@@ -11,6 +11,7 @@ const getWidgetConfig = asyncHandler(async (req, res) => {
       name: bot.name,
       widgetConfig: bot.widgetConfig,
       leadConfig: bot.leadConfig,
+      agentConfig: bot.agentConfig,
       isActive: bot.isActive,
     },
   });
@@ -59,6 +60,8 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
       identifierRequired: true,
       verifyIdentifier: false,
     },
+    // Human handover — whether the "Talk to a human" option is offered at all.
+    agentConfig: bot.agentConfig || { assignEnabled: false },
   };
 
   const script = buildWidgetScript({ apiBaseUrl, publicKey, config });
@@ -226,6 +229,20 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     "#jb-lead-otp{display:none;flex-direction:column;gap:10px;}",
     "#jb-lead-otp.show{display:flex;}",
     "#jb-lead-otp-msg{font-size:12px;color:" + colors.textMuted + ";}",
+
+    // human handover
+    "#jb-handover-bar{padding:8px 12px;border-top:1px solid " + colors.border + ";",
+    "background:" + colors.bg + ";flex-shrink:0;}",
+    "#jb-handover-btn{width:100%;background:none;border:1px dashed " + colors.border + ";",
+    "border-radius:10px;padding:8px 10px;font-size:12px;color:" + colors.textMuted + ";",
+    "cursor:pointer;font-family:inherit;transition:border-color .15s,color .15s;}",
+    "#jb-handover-btn:hover{border-color:" + CONFIG.primaryColor + ";color:" + colors.text + ";}",
+    "#jb-handover-btn:disabled{opacity:.6;cursor:default;}",
+    ".jb-system-msg{align-self:center;font-size:11px;color:" + colors.textMuted + ";",
+    "background:" + colors.bgMsgs + ";border:1px solid " + colors.border + ";border-radius:20px;",
+    "padding:4px 12px;margin:4px 0;}",
+    ".jb-agent-label{font-size:10px;font-weight:600;color:" + CONFIG.primaryColor + ";",
+    "margin-bottom:2px;text-transform:uppercase;letter-spacing:.03em;}",
   ].join("");
   document.head.appendChild(style);
 
@@ -249,6 +266,13 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   }
 
   var leadDone = !LEAD.enabled || storageGet(LEAD_DONE_KEY) === "1";
+
+  // ---------- human handover state ----------
+  var AGENT_CONFIG = CONFIG.agentConfig || { assignEnabled: false };
+  var handoverStatus = "none"; // none | requested | assigned | resolved
+  var pollTimer = null;
+  var lastPollAt = null;
+  var historyLoaded = false;
 
   // ---------- build DOM ----------
   // Bubble button
@@ -327,6 +351,15 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   leadEl.id = "jb-lead";
   leadEl.innerHTML = leadHtml;
   win.appendChild(leadEl);
+
+  // ---------- human handover bar ----------
+  var handoverBarEl = null;
+  if (AGENT_CONFIG.assignEnabled) {
+    handoverBarEl = document.createElement("div");
+    handoverBarEl.id = "jb-handover-bar";
+    handoverBarEl.innerHTML = '<button id="jb-handover-btn" type="button">Talk to a human agent</button>';
+    win.appendChild(handoverBarEl);
+  }
 
   var msgsEl   = document.getElementById("jb-msgs");
   var inputEl  = document.getElementById("jb-input");
@@ -485,7 +518,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     bubble.classList.add("open");
     bubble.setAttribute("aria-label", "Close chat");
     if (leadDone) {
-      showWelcome();
+      loadHistory();
       setTimeout(function () { inputEl.focus(); }, 100);
     } else {
       setTimeout(function () {
@@ -515,9 +548,28 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     msgsEl.appendChild(el);
   }
 
-  function addMessage(role, text) {
+  function addMessage(role, text, agentName) {
     var el = document.createElement("div");
     el.className = "jb-msg " + role;
+    if (agentName) {
+      var label = document.createElement("div");
+      label.className = "jb-agent-label";
+      label.textContent = agentName;
+      el.appendChild(label);
+      var body = document.createElement("div");
+      body.textContent = text;
+      el.appendChild(body);
+    } else {
+      el.textContent = text;
+    }
+    msgsEl.appendChild(el);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+    return el;
+  }
+
+  function addSystemMessage(text) {
+    var el = document.createElement("div");
+    el.className = "jb-system-msg";
     el.textContent = text;
     msgsEl.appendChild(el);
     msgsEl.scrollTop = msgsEl.scrollHeight;
@@ -538,6 +590,111 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     if (t) t.remove();
   }
 
+  // ---------- human handover ----------
+  function hideHandoverBar() {
+    if (handoverBarEl) handoverBarEl.style.display = "none";
+  }
+
+  function requestHandover() {
+    var btn = document.getElementById("jb-handover-btn");
+    if (btn) { btn.disabled = true; btn.textContent = "Connecting..."; }
+
+    fetch(API_BASE + "/api/v1/chat/request-handover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": PK },
+      body: JSON.stringify({ sessionId: sessionId })
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || "Could not connect to an agent"); });
+      return r.json();
+    }).then(function () {
+      handoverStatus = "requested";
+      addTimestamp();
+      addSystemMessage("Connecting you with an agent...");
+      hideHandoverBar();
+      startPolling();
+    }).catch(function (err) {
+      if (btn) { btn.disabled = false; btn.textContent = "Talk to a human agent"; }
+      addSystemMessage(err.message || "Could not connect to an agent right now.");
+    });
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollTimer = setInterval(pollNow, 4000);
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  function pollNow() {
+    var url = API_BASE + "/api/v1/chat/poll?sessionId=" + encodeURIComponent(sessionId);
+    if (lastPollAt) url += "&since=" + encodeURIComponent(lastPollAt);
+
+    fetch(url, { headers: { "x-api-key": PK } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (json) {
+        if (json && json.data) applyPollResult(json.data, false);
+      })
+      .catch(function () {});
+  }
+
+  // isInitialLoad: render the visitor's own past messages too (needed once,
+  // right after a page reload) — during normal polling we skip role:"user"
+  // since the visitor's own new messages are already rendered locally the
+  // instant they're sent.
+  function applyPollResult(data, isInitialLoad) {
+    lastPollAt = new Date().toISOString();
+
+    if (data.status !== handoverStatus) {
+      if (data.status === "assigned" && handoverStatus !== "assigned" && !isInitialLoad) {
+        addTimestamp();
+        addSystemMessage(data.assignedAgentName ? "You're now connected with " + data.assignedAgentName + "." : "An agent has joined the chat.");
+      }
+      if (data.status === "resolved") {
+        stopPolling();
+      }
+      handoverStatus = data.status;
+      if (handoverStatus !== "none") hideHandoverBar();
+    }
+
+    (data.messages || []).forEach(function (m) {
+      if (m.role === "user") {
+        if (isInitialLoad) addMessage("user", m.content);
+        return;
+      }
+      addMessage("bot", m.content, m.via === "agent" ? (m.agentName || "Agent") : null);
+    });
+  }
+
+  // Rehydrates a returning visitor's conversation (messages + handover
+  // state) on page load, then reveals the welcome message only if there's
+  // nothing to show.
+  function loadHistory() {
+    if (historyLoaded) { showWelcome(); return; }
+    historyLoaded = true;
+
+    fetch(API_BASE + "/api/v1/chat/poll?sessionId=" + encodeURIComponent(sessionId), {
+      headers: { "x-api-key": PK }
+    }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (json) {
+      if (json && json.data) {
+        var data = json.data;
+        if ((data.messages || []).length) addTimestamp();
+        applyPollResult(data, true);
+        if (handoverStatus === "requested" || handoverStatus === "assigned") startPolling();
+      }
+      showWelcome();
+    }).catch(function () {
+      showWelcome();
+    });
+  }
+
+  if (handoverBarEl) {
+    document.getElementById("jb-handover-btn").addEventListener("click", requestHandover);
+  }
+
   // ---------- send message ----------
   function sendMessage() {
     var text = inputEl.value.trim();
@@ -549,7 +706,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
 
     addTimestamp();
     addMessage("user", text);
-    showTyping();
+    if (handoverStatus === "none") showTyping();
     isStreaming = true;
 
     var botEl = null;
@@ -629,6 +786,17 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
                 if (!botEl) botEl = addMessage("bot", "");
                 botEl.textContent = "Sorry, something went wrong: " + (payload.message || "unknown error");
                 isStreaming = false;
+              }
+
+              if (eventName === "handover") {
+                removeTyping();
+                isStreaming = false;
+                if (payload.status === "requested" && handoverStatus === "none") {
+                  handoverStatus = "requested";
+                  addSystemMessage("Connecting you with an agent...");
+                  hideHandoverBar();
+                }
+                startPolling();
               }
             } catch (e) {
               // Ignore malformed JSON in partial SSE frames

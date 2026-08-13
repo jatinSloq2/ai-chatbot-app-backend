@@ -23,4 +23,12 @@ router.post("/notifications/read-all", agentAuthController.markAllNotificationsR
 router.post("/notifications/:id/read", agentAuthController.markNotificationRead);
 router.post("/notifications/test", agentAuthController.sendTestNotification);
 
+router.get("/handovers/pending", agentAuthController.listPendingHandovers);
+router.get("/handovers/assigned", agentAuthController.listMyHandovers);
+router.post("/handovers/:conversationId/accept", agentAuthController.acceptHandover);
+
+router.get("/conversations/:conversationId", agentAuthController.getMyConversation);
+router.post("/conversations/:conversationId/message", agentAuthController.sendAgentMessage);
+router.post("/conversations/:conversationId/resolve", agentAuthController.resolveConversation);
+
 module.exports = router;

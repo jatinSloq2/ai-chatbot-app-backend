@@ -36,6 +36,12 @@ const botChatLimiter = rateLimit({
 router.options("/chat", widgetCors);
 router.post("/chat", widgetCors, chatLimiter, requireBotPublicKey, botChatLimiter, chatController.chat);
 
+router.options("/chat/request-handover", widgetCors);
+router.post("/chat/request-handover", widgetCors, chatLimiter, requireBotPublicKey, chatController.requestHandover);
+
+router.options("/chat/poll", widgetCors);
+router.get("/chat/poll", widgetCors, requireBotPublicKey, chatController.pollChat);
+
 // --- Lead capture (public key, called by widget pre-chat form) ---
 const leadLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 
