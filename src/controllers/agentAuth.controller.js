@@ -3,6 +3,8 @@ const ApiError = require("../utils/ApiError");
 const agentService = require("../services/agent.service");
 const notificationService = require("../services/notification.service");
 const handoverService = require("../services/handover.service");
+const realtimeService = require("../services/realtime.service");
+const { setupSSE, sendEvent, startHeartbeat } = require("../utils/sse");
 const Agent = require("../models/Agent");
 const {
   verifyRefreshToken,
@@ -229,6 +231,31 @@ const resolveConversation = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { conversation: sanitizeConversation(conversation) } });
 });
 
+// GET /api/agent-auth/stream — persistent realtime connection for the whole
+// time the agent panel is open. Fires a lightweight "update" event whenever
+// something this agent cares about changes (a new chat entered the pending
+// pool for one of their eligible bots, one of their own assignments changed,
+// or a visitor sent a message on a conversation assigned to them); the
+// frontend reacts by invalidating the relevant RTK Query tag, which
+// refetches automatically. No business data is pushed over the stream
+// itself — this replaces interval polling, not the REST endpoints.
+const stream = asyncHandler(async (req, res) => {
+  const agentId = req.agent._id;
+  const botIds = await handoverService.eligibleBotIds(agentId);
+
+  setupSSE(req, res);
+  sendEvent(res, "connected", {});
+
+  const channels = [`agent-assigned:${agentId}`, ...botIds.map((id) => `bot-handovers:${id}`)];
+  channels.forEach((c) => realtimeService.subscribe(c, res));
+  const stopHeartbeat = startHeartbeat(res);
+
+  req.on("close", () => {
+    channels.forEach((c) => realtimeService.unsubscribe(c, res));
+    stopHeartbeat();
+  });
+});
+
 module.exports = {
   login,
   refreshToken,
@@ -247,4 +274,5 @@ module.exports = {
   getMyConversation,
   sendAgentMessage,
   resolveConversation,
+  stream,
 };

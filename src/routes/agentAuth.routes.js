@@ -31,4 +31,6 @@ router.get("/conversations/:conversationId", agentAuthController.getMyConversati
 router.post("/conversations/:conversationId/message", agentAuthController.sendAgentMessage);
 router.post("/conversations/:conversationId/resolve", agentAuthController.resolveConversation);
 
+router.get("/stream", agentAuthController.stream);
+
 module.exports = router;

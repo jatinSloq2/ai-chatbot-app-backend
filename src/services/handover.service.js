@@ -4,6 +4,7 @@ const Bot = require("../models/Bot");
 const Conversation = require("../models/Conversation");
 const ApiError = require("../utils/ApiError");
 const notificationService = require("./notification.service");
+const realtimeService = require("./realtime.service");
 
 // Bots this agent is allowed to see conversations for: bots they're directly
 // linked to, bots that directly assign them, or bots that assign a team
@@ -60,6 +61,10 @@ const requestHandover = async (bot, sessionId) => {
         data: { botId: bot._id.toString(), conversationId: conversation._id.toString() },
     });
 
+    // Pushes to every currently-connected, eligible agent's dashboard stream —
+    // their pending list refetches immediately instead of on the next poll tick.
+    realtimeService.publish(`bot-handovers:${bot._id}`, "update", { scope: "pending" });
+
     return conversation;
 };
 
@@ -69,11 +74,21 @@ const requestHandover = async (bot, sessionId) => {
 const appendVisitorMessage = async (conversation, message) => {
     conversation.messages.push({ role: "user", content: message });
     await conversation.save();
+
+    realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+    if (conversation.handover.assignedAgent) {
+        realtimeService.publish(`agent-assigned:${conversation.handover.assignedAgent}`, "update", {
+            scope: "conversation",
+            conversationId: conversation._id.toString(),
+        });
+    }
+
     return conversation;
 };
 
-// Widget polls this while handover is active to pick up the agent's replies
-// (and to notice when it's been accepted/resolved) without needing sockets.
+// One-shot fetch of everything since `since` (or the full transcript if
+// omitted) — used for the widget's initial history load, and as the "go
+// check what changed" pull triggered by the realtime stream's "update" event.
 const pollUpdates = async (bot, sessionId, since) => {
     const conversation = await Conversation.findOne({ bot: bot._id, sessionId }).populate(
         "handover.assignedAgent",
@@ -132,6 +147,14 @@ const acceptHandover = async (agentId, conversationId) => {
     }
 
     await Agent.updateOne({ _id: agentId }, { $inc: { "performance.assignedCount": 1 } });
+
+    // Tell other agents' pending lists this chat is gone, tell the accepting
+    // agent's own dashboard to pick up their new assignment, and tell the
+    // visitor (if their stream is open) that someone joined.
+    realtimeService.publish(`bot-handovers:${conversation.bot}`, "update", { scope: "pending" });
+    realtimeService.publish(`agent-assigned:${agentId}`, "update", { scope: "assigned" });
+    realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+
     return conversation;
 };
 
@@ -151,6 +174,9 @@ const sendAgentMessage = async (agent, conversationId, message) => {
     }
     conversation.messages.push({ role: "assistant", content: message, via: "agent", agentName: agent.name });
     await conversation.save();
+
+    realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+
     return conversation;
 };
 
@@ -160,6 +186,10 @@ const resolveHandover = async (agentId, conversationId) => {
     conversation.handover.resolvedAt = new Date();
     await conversation.save();
     await Agent.updateOne({ _id: agentId }, { $inc: { "performance.resolvedCount": 1 } });
+
+    realtimeService.publish(`agent-assigned:${agentId}`, "update", { scope: "assigned" });
+    realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+
     return conversation;
 };
 

@@ -42,6 +42,9 @@ router.post("/chat/request-handover", widgetCors, chatLimiter, requireBotPublicK
 router.options("/chat/poll", widgetCors);
 router.get("/chat/poll", widgetCors, requireBotPublicKey, chatController.pollChat);
 
+router.options("/chat/stream", widgetCors);
+router.get("/chat/stream", widgetCors, requireBotPublicKey, chatController.streamChat);
+
 // --- Lead capture (public key, called by widget pre-chat form) ---
 const leadLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });
 

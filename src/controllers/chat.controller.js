@@ -5,27 +5,11 @@ const ragService = require("../services/rag.service");
 const llmService = require("../services/llm.service");
 const botService = require("../services/bot.service");
 const handoverService = require("../services/handover.service");
+const realtimeService = require("../services/realtime.service");
 const Bot = require("../models/Bot");
 const { nanoid } = require("nanoid");
 const analyticsService = require("../services/analytics.service");
-
-function setupSSE(req, res, extraHeaders = {}) {
-  const origin = req.headers.origin || "*";
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
-  res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, x-api-key");
-  res.setHeader("Vary", "Origin");
-  Object.entries(extraHeaders).forEach(([k, v]) => res.setHeader(k, v));
-  if (res.flushHeaders) res.flushHeaders();
-}
-
-function sendEvent(res, event, data) {
-  res.write(`event: ${event}\n`);
-  res.write(`data: ${JSON.stringify(data)}\n\n`);
-}
+const { setupSSE, sendEvent, startHeartbeat } = require("../utils/sse");
 
 // POST /api/v1/chat  (auth: bot public key)
 const chat = asyncHandler(async (req, res) => {
@@ -269,7 +253,8 @@ const requestHandover = asyncHandler(async (req, res) => {
 });
 
 // GET /api/v1/chat/poll?sessionId=...&since=ISO_DATE  (auth: bot public key)
-// Widget polls this while handover is active to pick up agent replies.
+// One-shot fetch — used for the initial history rehydration on page load.
+// Ongoing updates come from streamChat below, not repeated calls to this.
 const pollChat = asyncHandler(async (req, res) => {
   const bot = req.bot;
   const { sessionId, since } = req.query;
@@ -279,4 +264,31 @@ const pollChat = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: result });
 });
 
-module.exports = { chat, testChat, requestHandover, pollChat };
+// GET /api/v1/chat/stream?sessionId=...  (auth: bot public key, via ?key= since
+// EventSource can't set custom headers)
+// Realtime push for an active handover: fires an "update" event whenever the
+// agent replies or the handover status changes. The widget reacts by doing
+// ONE poll fetch (above) to pull the delta — this stream carries no message
+// data itself, it's purely "something changed, go check."
+const streamChat = asyncHandler(async (req, res) => {
+  const bot = req.bot;
+  const { sessionId } = req.query;
+  if (!sessionId) throw new ApiError(400, "sessionId is required");
+
+  const conversation = await Conversation.findOne({ bot: bot._id, sessionId });
+  if (!conversation) throw new ApiError(404, "Conversation not found");
+
+  setupSSE(req, res);
+  sendEvent(res, "connected", {});
+
+  const channel = `conv:${conversation._id}`;
+  realtimeService.subscribe(channel, res);
+  const stopHeartbeat = startHeartbeat(res);
+
+  req.on("close", () => {
+    realtimeService.unsubscribe(channel, res);
+    stopHeartbeat();
+  });
+});
+
+module.exports = { chat, testChat, requestHandover, pollChat, streamChat };

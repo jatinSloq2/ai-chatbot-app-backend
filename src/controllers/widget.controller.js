@@ -270,7 +270,6 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   // ---------- human handover state ----------
   var AGENT_CONFIG = CONFIG.agentConfig || { assignEnabled: false };
   var handoverStatus = "none"; // none | requested | assigned | resolved
-  var pollTimer = null;
   var lastPollAt = null;
   var historyLoaded = false;
 
@@ -611,23 +610,30 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
       addTimestamp();
       addSystemMessage("Connecting you with an agent...");
       hideHandoverBar();
-      startPolling();
+      openEventStream();
     }).catch(function (err) {
       if (btn) { btn.disabled = false; btn.textContent = "Talk to a human agent"; }
       addSystemMessage(err.message || "Could not connect to an agent right now.");
     });
   }
 
-  function startPolling() {
-    if (pollTimer) return;
-    pollTimer = setInterval(pollNow, 4000);
+  var eventSource = null;
+
+  function openEventStream() {
+    if (eventSource || typeof EventSource === "undefined") return;
+    var url = API_BASE + "/api/v1/chat/stream?sessionId=" + encodeURIComponent(sessionId) + "&key=" + encodeURIComponent(PK);
+    eventSource = new EventSource(url);
+    eventSource.addEventListener("update", function () {
+      refreshFromServer();
+    });
+    // EventSource auto-reconnects on drop by default; nothing extra needed here.
   }
 
-  function stopPolling() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  function closeEventStream() {
+    if (eventSource) { eventSource.close(); eventSource = null; }
   }
 
-  function pollNow() {
+  function refreshFromServer() {
     var url = API_BASE + "/api/v1/chat/poll?sessionId=" + encodeURIComponent(sessionId);
     if (lastPollAt) url += "&since=" + encodeURIComponent(lastPollAt);
 
@@ -640,7 +646,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   }
 
   // isInitialLoad: render the visitor's own past messages too (needed once,
-  // right after a page reload) — during normal polling we skip role:"user"
+  // right after a page reload) — during normal updates we skip role:"user"
   // since the visitor's own new messages are already rendered locally the
   // instant they're sent.
   function applyPollResult(data, isInitialLoad) {
@@ -652,7 +658,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
         addSystemMessage(data.assignedAgentName ? "You're now connected with " + data.assignedAgentName + "." : "An agent has joined the chat.");
       }
       if (data.status === "resolved") {
-        stopPolling();
+        closeEventStream();
       }
       handoverStatus = data.status;
       if (handoverStatus !== "none") hideHandoverBar();
@@ -683,7 +689,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
         var data = json.data;
         if ((data.messages || []).length) addTimestamp();
         applyPollResult(data, true);
-        if (handoverStatus === "requested" || handoverStatus === "assigned") startPolling();
+        if (handoverStatus === "requested" || handoverStatus === "assigned") openEventStream();
       }
       showWelcome();
     }).catch(function () {
@@ -796,7 +802,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
                   addSystemMessage("Connecting you with an agent...");
                   hideHandoverBar();
                 }
-                startPolling();
+                openEventStream();
               }
             } catch (e) {
               // Ignore malformed JSON in partial SSE frames

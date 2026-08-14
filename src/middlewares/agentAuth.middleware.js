@@ -14,6 +14,13 @@ const protectAgent = asyncHandler(async (req, res, next) => {
         token = req.headers.authorization.split(" ")[1];
     }
 
+    // EventSource (used for the agent's realtime stream) can't set custom
+    // headers, so it passes the access token as a query param instead. Only
+    // relevant for that one route, but harmless to accept everywhere.
+    if (!token && req.query?.token) {
+        token = req.query.token;
+    }
+
     if (!token) {
         throw new ApiError(401, "Not authenticated. Please log in as an agent");
     }
