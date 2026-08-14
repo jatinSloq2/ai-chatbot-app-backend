@@ -72,7 +72,7 @@ if (process.env.NODE_ENV !== "production") {
 
 const globalLimiter = rateLimit({
   windowMs: (Number(process.env.RATE_LIMIT_WINDOW_MIN) || 15) * 60 * 1000,
-  max: Number(process.env.RATE_LIMIT_MAX) || 100,
+  max: Number(process.env.RATE_LIMIT_MAX) || 1000,
   standardHeaders: true,
   legacyHeaders: false,
 });
