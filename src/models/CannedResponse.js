@@ -1,5 +1,22 @@
 const mongoose = require("mongoose");
 
+const richButtonSchema = new mongoose.Schema({ label: String, value: String }, { _id: false });
+
+// Defined as a real Schema (not an inline object literal) specifically to
+// avoid Mongoose's "type" key ambiguity: a plain object field named `type`
+// nested inside another field's `{ type: ..., default: ... }` descriptor is
+// indistinguishable from "this is the field's data type" to Mongoose, and
+// throws at model-compile time. Wrapping it in mongoose.Schema(...) makes it
+// an unambiguous type reference. See Conversation.js's richContentSchema for
+// the same pattern.
+const cannedRichContentSchema = new mongoose.Schema(
+    {
+        type: { type: String, enum: ["buttons", "quick_replies", "card"], default: null },
+        buttons: { type: [richButtonSchema], default: [] },
+    },
+    { _id: false }
+);
+
 // A saved reply ("macro") an agent can drop into a conversation instead of
 // retyping a common answer. Owned by the platform account (User), scoped
 // either to a single bot or shared across every bot the owner has —
@@ -33,13 +50,7 @@ const cannedResponseSchema = new mongoose.Schema(
         ],
 
         // Optional buttons/quick-replies sent alongside the macro's text.
-        richContent: {
-            type: {
-                type: { type: String, enum: ["buttons", "quick_replies", "card"], default: null },
-                buttons: [{ _id: false, label: String, value: String }],
-            },
-            default: null,
-        },
+        richContent: { type: cannedRichContentSchema, default: null },
 
         usageCount: { type: Number, default: 0 }, // incremented each time an agent uses it
 
