@@ -25,7 +25,7 @@ const ADMIN_PLAN = {
     maxMessagesPerMonth: UNLIMITED,
     allowUserOwnApiKey: true,
     allowedProviders: ["ollama", "openai", "anthropic", "google", "groq", "mistral"],
-    customBranding: true,
+    hideWatermark: true,
   },
 };
 
