@@ -51,8 +51,8 @@ const botSchema = new mongoose.Schema(
       primaryColor: { type: String, default: "#4F46E5" },
       welcomeMessage: { type: String, default: "Hi! How can I help you today?" },
       position: { type: String, enum: ["bottom-right", "bottom-left"], default: "bottom-right" },
-      // Up to 5 quick-question bubbles shown on the widget's opening screen
-      // (alongside the welcome message, before the visitor has sent
+      // Up to 5 quick-question bubbles shown inline in the conversation
+      // panel (alongside the welcome message, before the visitor has sent
       // anything). Tapping one sends its text as the visitor's first
       // message, exactly as if they had typed it.
       faqs: {
@@ -63,6 +63,27 @@ const botSchema = new mongoose.Schema(
           message: "You can add up to 5 quick questions",
         },
       },
+
+      // --- Full widget redesign (v2) ---
+      // Persisted theme. Still overridable per-embed via ?theme= for pages
+      // that need to force light/dark regardless of the saved default.
+      theme: { type: String, enum: ["light", "dark", "auto"], default: "light" },
+      // Maps to a small set of safe, always-available web-font stacks —
+      // never a raw font string, so the embed script never has to fetch or
+      // trust arbitrary CSS.
+      fontFamily: {
+        type: String,
+        enum: ["system", "inter", "poppins", "roboto", "georgia"],
+        default: "system",
+      },
+      // How the closed-state launcher renders: a plain icon circle, a
+      // pill with an icon + label, or the bot's avatar as the icon.
+      launcherStyle: { type: String, enum: ["icon", "icon-text", "avatar"], default: "icon" },
+      launcherText: { type: String, default: "Chat with us" },
+      // Short two-tone chime on new incoming bot/agent messages while the
+      // widget is closed or the tab isn't focused. No audio file — the
+      // script synthesizes it with the Web Audio API.
+      soundEnabled: { type: Boolean, default: true },
     },
 
     // --- Pre-chat lead capture (widget) ---

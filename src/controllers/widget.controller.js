@@ -29,8 +29,9 @@ const getWidgetConfig = asyncHandler(async (req, res) => {
 //   title      = chat window title
 //   welcome    = welcome message
 //   avatar     = URL to a bot avatar image
-//   height     = chat window height in px (default 520)
-//   width      = chat window width in px (default 360)
+//   font       = "system" | "inter" | "poppins" | "roboto" | "georgia"
+//   height     = chat window starting height in px (default 520, visitor can resize)
+//   width      = chat window starting width in px (default 360, visitor can resize)
 const serveWidgetScript = asyncHandler(async (req, res) => {
   const publicKey = req.query.key;
   if (!publicKey) throw new ApiError(400, "Missing ?key= parameter");
@@ -47,14 +48,21 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
     primaryColor: req.query.color || savedConfig.primaryColor || "#f97316",
     welcomeMessage: req.query.welcome || savedConfig.welcomeMessage || "Hi! How can I help you today?",
     position: req.query.position || savedConfig.position || "bottom-right",
-    theme: req.query.theme || "light",
+    theme: req.query.theme || savedConfig.theme || "light",
     avatar: req.query.avatar || savedConfig.avatar || null,
+    // Starting size only — the visitor can drag-resize the window from the
+    // corner handle, so these are just the initial width/height.
     height: parseInt(req.query.height) || 520,
     width: parseInt(req.query.width) || 360,
     botName: bot.name,
-    // Up to 5 quick-question bubbles shown on the opening screen. Tapping
-    // one sends its text as the visitor's message.
+    // Up to 5 quick-question bubbles shown in the conversation panel.
+    // Tapping one sends its text as the visitor's message.
     faqs: (savedConfig.faqs || []).slice(0, 5),
+    // --- Full widget redesign (v2) ---
+    fontFamily: req.query.font || savedConfig.fontFamily || "system",
+    launcherStyle: savedConfig.launcherStyle || "icon",
+    launcherText: savedConfig.launcherText || "Chat with us",
+    soundEnabled: savedConfig.soundEnabled !== false,
     // Pre-chat lead capture form settings (name/email/phone + verification)
     leadConfig: bot.leadConfig || {
       enabled: false,
@@ -94,15 +102,73 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   var CONFIG   = ${cfg};
   var API_BASE = ${api};
   var PK       = ${key};
-  var SK       = "jb_sid_" + PK; // localStorage key for persisting sessionId
+  var SK       = "jb_sid_" + PK; // sessionStorage key for the session token — cleared when the tab closes
 
   // ---------- helpers ----------
   function storageGet(k) { try { return localStorage.getItem(k); } catch(e) { return null; } }
   function storageSet(k,v) { try { localStorage.setItem(k,v); } catch(e) {} }
+  // Session-scoped — cleared when the tab closes. Used only for the
+  // sessionId/token, not for the other persisted widget state.
+  function sessionStorageGet(k) { try { return sessionStorage.getItem(k); } catch(e) { return null; } }
+  function sessionStorageSet(k,v) { try { sessionStorage.setItem(k,v); } catch(e) {} }
   function esc(s) {
     return String(s)
       .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
       .replace(/"/g,"&quot;");
+  }
+
+  // ---------- fonts ----------
+  var FONT_STACKS = {
+    system: "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
+    inter: "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+    poppins: "'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+    roboto: "'Roboto',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+    georgia: "Georgia,'Times New Roman',serif",
+  };
+  var fontStack = FONT_STACKS[CONFIG.fontFamily] || FONT_STACKS.system;
+  // Google Fonts is only loaded for stacks that actually need a webfont —
+  // "system" and "georgia" use fonts every browser already has.
+  if (CONFIG.fontFamily === "inter" || CONFIG.fontFamily === "poppins" || CONFIG.fontFamily === "roboto") {
+    var fontLinkFamily = CONFIG.fontFamily === "inter" ? "Inter:wght@400;500;600;700"
+      : CONFIG.fontFamily === "poppins" ? "Poppins:wght@400;500;600;700"
+      : "Roboto:wght@400;500;700";
+    if (!document.getElementById("jb-font-link")) {
+      var fontLink = document.createElement("link");
+      fontLink.id = "jb-font-link";
+      fontLink.rel = "stylesheet";
+      fontLink.href = "https://fonts.googleapis.com/css2?family=" + fontLinkFamily + "&display=swap";
+      document.head.appendChild(fontLink);
+    }
+  }
+
+  // ---------- notification sound ----------
+  // Synthesized two-tone chime (Web Audio API) — no audio file, no network
+  // request. Only plays for messages that arrive while the widget is
+  // closed or the tab isn't focused; a visitor actively looking at the
+  // chat doesn't need an audio cue.
+  var audioCtx = null;
+  function playNotifySound() {
+    if (!CONFIG.soundEnabled) return;
+    if (isOpen && !document.hidden) return;
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      if (!audioCtx) audioCtx = new Ctx();
+      var now = audioCtx.currentTime;
+      [880, 1175].forEach(function (freq, i) {
+        var osc = audioCtx.createOscillator();
+        var gain = audioCtx.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0, now + i * 0.11);
+        gain.gain.linearRampToValueAtTime(0.12, now + i * 0.11 + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + i * 0.11 + 0.22);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start(now + i * 0.11);
+        osc.stop(now + i * 0.11 + 0.24);
+      });
+    } catch (e) { /* audio not available — silently skip */ }
   }
 
   // ---------- theme ----------
@@ -125,8 +191,18 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     shadow:    isDark ? "rgba(0,0,0,0.6)" : "rgba(0,0,0,0.15)",
   };
 
-  var pos = CONFIG.position === "bottom-left"
-    ? "left:20px;" : "right:20px;";
+  var isLeftPositioned = CONFIG.position === "bottom-left";
+  var pos = isLeftPositioned ? "left:20px;" : "right:20px;";
+
+  // ---------- size (resizable) ----------
+  // The window opens at CONFIG.width/height, but the visitor can drag the
+  // corner handle to resize it. We track the live size in JS and set it as
+  // an inline style, which always wins over the CSS defaults below.
+  var MIN_W = 300, MIN_H = 400;
+  function maxW() { return Math.min(640, window.innerWidth - 32); }
+  function maxH() { return Math.min(820, window.innerHeight - 120); }
+  var winWidth  = Math.max(MIN_W, Math.min(maxW(), CONFIG.width));
+  var winHeight = Math.max(MIN_H, Math.min(maxH(), CONFIG.height));
 
   // ---------- inject styles ----------
   var style = document.createElement("style");
@@ -137,19 +213,45 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     "justify-content:center;z-index:2147483646;box-shadow:0 4px 20px " + colors.shadow + ";",
     "transition:transform .2s,box-shadow .2s;border:none;outline:none;}",
     "#jb-bubble:hover{transform:scale(1.08);box-shadow:0 8px 28px " + colors.shadow + ";}",
-    "#jb-bubble svg{width:26px;height:26px;fill:#fff;transition:opacity .2s;}",
+    "#jb-bubble svg{width:26px;height:26px;fill:#fff;transition:opacity .2s;flex-shrink:0;}",
     "#jb-bubble .jb-close{display:none;}",
     "#jb-bubble.open .jb-chat{display:none;}",
     "#jb-bubble.open .jb-close{display:block;}",
 
-    // window
-    "#jb-win{position:fixed;" + pos + "bottom:92px;width:" + CONFIG.width + "px;",
-    "max-width:calc(100vw - 32px);height:" + CONFIG.height + "px;max-height:calc(100vh - 120px);",
+    // launcher style: icon-text pill (collapses to a plain circle once open)
+    "#jb-bubble.jb-launcher-text{width:auto;height:50px;border-radius:25px;padding:0 20px 0 16px;gap:9px;}",
+    "#jb-bubble.jb-launcher-text .jb-launcher-label{color:#fff;font-size:14px;font-weight:600;",
+    "white-space:nowrap;font-family:" + fontStack + ";}",
+    "#jb-bubble.jb-launcher-text.open{width:56px;height:56px;padding:0;border-radius:50%;}",
+    "#jb-bubble.jb-launcher-text.open .jb-launcher-label{display:none;}",
+
+    // launcher style: bot avatar as the closed-state icon
+    "#jb-bubble.jb-launcher-avatar .jb-launcher-avatar-img{width:100%;height:100%;border-radius:50%;",
+    "object-fit:cover;display:block;}",
+    "#jb-bubble.jb-launcher-avatar .jb-chat{display:none;}",
+    "#jb-bubble.jb-launcher-avatar.open .jb-launcher-avatar-img{display:none;}",
+    "#jb-bubble.jb-launcher-avatar.open .jb-close{display:block;}",
+
+    // window — single screen (chat, or the pre-chat lead form). Width/height
+    // start from CONFIG but are overwritten inline once the visitor resizes.
+    "#jb-win{position:fixed;" + pos + "bottom:92px;width:" + winWidth + "px;",
+    "max-width:calc(100vw - 32px);height:" + winHeight + "px;max-height:calc(100vh - 120px);",
     "background:" + colors.bg + ";border-radius:16px;display:none;flex-direction:column;",
     "overflow:hidden;z-index:2147483645;box-shadow:0 8px 40px " + colors.shadow + ";",
-    "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;",
+    "font-family:" + fontStack + ";",
     "border:1px solid " + colors.border + ";}",
     "#jb-win.open{display:flex;}",
+
+    // resize handle — sits at the corner farthest from the anchored edge, so
+    // dragging it naturally grows the window (bottom/side stay pinned).
+    "#jb-resize-handle{position:absolute;top:0;" + (isLeftPositioned ? "right:0;" : "left:0;") + "",
+    "width:18px;height:18px;z-index:10;cursor:" + (isLeftPositioned ? "nesw-resize" : "nwse-resize") + ";",
+    "display:flex;align-items:" + (isLeftPositioned ? "flex-start" : "flex-start") + ";",
+    "justify-content:" + (isLeftPositioned ? "flex-end" : "flex-start") + ";padding:3px;",
+    "opacity:.35;transition:opacity .15s;touch-action:none;}",
+    "#jb-resize-handle:hover{opacity:.9;}",
+    "#jb-resize-handle svg{width:11px;height:11px;fill:none;stroke:" + colors.textMuted + ";",
+    "stroke-width:1.6;stroke-linecap:round;}",
 
     // header
     "#jb-head{background:" + CONFIG.primaryColor + ";padding:14px 16px;display:flex;",
@@ -194,7 +296,8 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     // timestamp
     ".jb-ts{font-size:10px;color:" + colors.textMuted + ";text-align:center;margin:4px 0;}",
 
-    // FAQ / quick-question bubbles (shown on the opening screen)
+    // FAQ / quick-question bubbles — shown inline in the conversation panel,
+    // right under the welcome message, on a fresh conversation.
     "#jb-faqs{display:flex;flex-wrap:wrap;gap:6px;align-self:flex-start;max-width:100%;",
     "margin-top:2px;animation:jb-fadein .2s ease;}",
     ".jb-faq-btn{background:" + colors.botBg + ";border:1px solid " + colors.border + ";",
@@ -276,11 +379,11 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
 
   // sessionId is created up-front (not just on first message) so the
   // pre-chat lead form can be tied to the same conversation the visitor
-  // ends up chatting in.
-  var sessionId = storageGet(SK);
+  // ends up chatting in. Session-scoped storage so it's cleared on tab close.
+  var sessionId = sessionStorageGet(SK);
   if (!sessionId) {
     sessionId = genId();
-    storageSet(SK, sessionId);
+    sessionStorageSet(SK, sessionId);
   }
 
   var leadDone = !LEAD.enabled || storageGet(LEAD_DONE_KEY) === "1";
@@ -292,15 +395,29 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   var historyLoaded = false;
 
   // ---------- build DOM ----------
-  // Bubble button
+  // Bubble button — style depends on CONFIG.launcherStyle: a plain icon
+  // circle (default), an icon+label pill, or the bot's avatar as the icon.
   var bubble = document.createElement("button");
   bubble.id = "jb-bubble";
   bubble.setAttribute("aria-label", "Open chat");
-  bubble.innerHTML =
-    '<svg class="jb-chat" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>' +
-    '<svg class="jb-close" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
 
-  // Chat window
+  var chatIconSvg = '<svg class="jb-chat" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>';
+  var closeIconSvg = '<svg class="jb-close" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
+
+  if (CONFIG.launcherStyle === "icon-text") {
+    bubble.className = "jb-launcher-text";
+    bubble.innerHTML = chatIconSvg + closeIconSvg +
+      '<span class="jb-launcher-label">' + esc(CONFIG.launcherText || "Chat with us") + '</span>';
+  } else if (CONFIG.launcherStyle === "avatar" && CONFIG.avatar) {
+    bubble.className = "jb-launcher-avatar";
+    bubble.innerHTML = '<img class="jb-launcher-avatar-img" src="' + esc(CONFIG.avatar) + '" alt="" />' +
+      chatIconSvg + closeIconSvg;
+  } else {
+    bubble.innerHTML = chatIconSvg + closeIconSvg;
+  }
+
+  // Chat window — a single screen: either the pre-chat lead form, or the
+  // conversation panel. There is no separate Home screen.
   var win = document.createElement("div");
   win.id = "jb-win";
   win.setAttribute("role", "dialog");
@@ -312,6 +429,9 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     : '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>';
 
   win.innerHTML =
+    '<div id="jb-resize-handle" title="Drag to resize">' +
+      '<svg viewBox="0 0 12 12"><path d="M1 11L11 1M5 11L11 5M9 11L11 9"/></svg>' +
+    '</div>' +
     '<div id="jb-head">' +
       '<div id="jb-head-avatar">' + avatarHTML + '</div>' +
       '<div id="jb-head-info">' +
@@ -331,7 +451,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
       '</button>' +
     '</div>';
 
-  win.className = leadDone ? "jb-mode-chat" : "jb-mode-lead";
+  win.className = !leadDone ? "jb-mode-lead" : "jb-mode-chat";
 
   document.body.appendChild(win);
   document.body.appendChild(bubble);
@@ -403,6 +523,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   var inputEl  = document.getElementById("jb-input");
   var sendBtn  = document.getElementById("jb-send");
   var closeBtn = document.getElementById("jb-head-close");
+  var resizeHandleEl = document.getElementById("jb-resize-handle");
   var isOpen   = false;
   var isStreaming = false;
 
@@ -427,9 +548,9 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   }
 
   // Renders up to 5 tappable quick-question bubbles under the welcome
-  // message. Only shown on a fresh conversation (no messages exchanged
-  // yet) — once the visitor sends anything, real or via a bubble tap, they
-  // disappear for good.
+  // message, right in the conversation panel. Only shown on a fresh
+  // conversation (no messages exchanged yet) — once the visitor sends
+  // anything, real or via a bubble tap, they disappear for good.
   function showFaqs() {
     if (!FAQS.length || userMsgCount > 0 || document.getElementById("jb-faqs")) return;
 
@@ -583,21 +704,72 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     sendBtn.classList.toggle("active", inputEl.value.trim().length > 0);
   });
 
+  // ---------- resize ----------
+  // Dragging the corner handle grows the window from the corner opposite
+  // the anchored edge (top-left for bottom-right widgets, top-right for
+  // bottom-left widgets), since #jb-win is pinned via bottom/right(left).
+  function applySize(w, h) {
+    winWidth = Math.max(MIN_W, Math.min(maxW(), w));
+    winHeight = Math.max(MIN_H, Math.min(maxH(), h));
+    win.style.width = winWidth + "px";
+    win.style.height = winHeight + "px";
+  }
+
+  function startResize(e) {
+    e.preventDefault();
+    var point = e.touches ? e.touches[0] : e;
+    var startX = point.clientX, startY = point.clientY;
+    var startW = winWidth, startH = winHeight;
+
+    function onMove(ev) {
+      var p = ev.touches ? ev.touches[0] : ev;
+      var dx = p.clientX - startX;
+      var dy = p.clientY - startY;
+      // Right-anchored: handle is top-left, dragging left/up grows the box.
+      // Left-anchored: handle is top-right, dragging right/up grows the box.
+      var newW = isLeftPositioned ? startW + dx : startW - dx;
+      var newH = startH - dy;
+      applySize(newW, newH);
+      if (ev.cancelable) ev.preventDefault();
+    }
+    function onUp() {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.removeEventListener("touchmove", onMove);
+      document.removeEventListener("touchend", onUp);
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    document.addEventListener("touchmove", onMove, { passive: false });
+    document.addEventListener("touchend", onUp);
+  }
+
+  if (resizeHandleEl) {
+    resizeHandleEl.addEventListener("mousedown", startResize);
+    resizeHandleEl.addEventListener("touchstart", startResize, { passive: false });
+  }
+
+  // Keep the window within bounds if the viewport shrinks (e.g. mobile
+  // rotation, or resizing the browser itself).
+  window.addEventListener("resize", function () {
+    applySize(winWidth, winHeight);
+  });
+
   // ---------- open / close ----------
   function openChat() {
     isOpen = true;
     win.classList.add("open");
     bubble.classList.add("open");
     bubble.setAttribute("aria-label", "Close chat");
-    if (leadDone) {
-      loadHistory();
-      setTimeout(function () { inputEl.focus(); }, 100);
-    } else {
+    if (!leadDone) {
       setTimeout(function () {
         if (leadNameEl) leadNameEl.focus();
         else if (leadIdEl) leadIdEl.focus();
       }, 100);
+      return;
     }
+    loadHistory();
+    setTimeout(function () { inputEl.focus(); }, 100);
   }
 
   function closeChat() {
@@ -746,6 +918,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
         return;
       }
       addMessage("bot", m.content, m.via === "agent" ? (m.agentName || "Agent") : null);
+      if (!isInitialLoad) playNotifySound();
     });
 
     if (isInitialLoad) {
@@ -861,7 +1034,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
 
               if (eventName === "session") {
                 // Save sessionId so the next message continues the same conversation
-                if (payload.sessionId) storageSet(SK, payload.sessionId);
+                if (payload.sessionId) sessionStorageSet(SK, payload.sessionId);
               }
 
               if (eventName === "token") {
@@ -876,6 +1049,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
               if (eventName === "done") {
                 removeTyping();
                 isStreaming = false;
+                playNotifySound();
               }
 
               if (eventName === "error") {
