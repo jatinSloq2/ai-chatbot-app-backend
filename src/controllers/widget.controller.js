@@ -2,6 +2,8 @@ const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const Bot = require("../models/Bot");
 const botService = require("../services/bot.service");
+const { describeBusinessHours } = require("../services/businessHours.service");
+const { getStrings } = require("../utils/i18n");
 
 // Hiding the "Powered by JestBot" watermark is a paid-plan feature.
 // Re-checked against the owner's LIVE plan here rather than trusting the
@@ -30,6 +32,7 @@ const getWidgetConfig = asyncHandler(async (req, res) => {
       agentConfig: bot.agentConfig,
       isActive: bot.isActive,
       faqs: bot.widgetConfig?.faqs || [],
+      businessHoursDescription: describeBusinessHours(bot),
     },
   });
 });
@@ -95,6 +98,24 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
     // Human handover — whether the "Talk to a human" option is offered at
     // all, and after how many visitor messages it's offered.
     agentConfig: bot.agentConfig || { assignEnabled: false, handoverMessageThreshold: 10 },
+    // Business hours — purely informational for the widget (the backend is
+    // the source of truth and decides offHours vs. a real handover), shown
+    // next to the handover button so visitors know when a human is around.
+    businessHoursDescription: describeBusinessHours(bot),
+    // Multiple language support — visitor can switch via the in-widget
+    // picker (shown only when more than one language is configured). Each
+    // supported language's UI strings are embedded so switching is instant,
+    // no extra request.
+    languages: {
+      default: bot.widgetConfig?.defaultLanguage || "en",
+      supported: bot.widgetConfig?.supportedLanguages?.length ? bot.widgetConfig.supportedLanguages : ["en"],
+      strings: Object.fromEntries(
+        (bot.widgetConfig?.supportedLanguages?.length ? bot.widgetConfig.supportedLanguages : ["en"]).map((code) => [
+          code,
+          getStrings(code),
+        ])
+      ),
+    },
   };
 
   const script = buildWidgetScript({ apiBaseUrl, publicKey, config });
@@ -400,6 +421,53 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     "padding:4px 12px;margin:4px 0;}",
     ".jb-agent-label{font-size:10px;font-weight:600;color:" + CONFIG.primaryColor + ";",
     "margin-bottom:2px;text-transform:uppercase;letter-spacing:.03em;}",
+
+    // rich replies — quick-reply chips / buttons rendered under a message
+    ".jb-rich{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;max-width:82%;align-self:flex-start;}",
+    ".jb-rich.jb-rich-user{align-self:flex-end;}",
+    ".jb-rich-btn{background:" + colors.bg + ";border:1px solid " + CONFIG.primaryColor + ";",
+    "color:" + CONFIG.primaryColor + ";border-radius:14px;padding:6px 12px;font-size:12.5px;",
+    "cursor:pointer;font-family:inherit;transition:background .15s,color .15s;}",
+    ".jb-rich-btn:hover{background:" + CONFIG.primaryColor + ";color:#fff;}",
+    ".jb-rich-btn:disabled{opacity:.5;cursor:default;}",
+
+    // rich replies — simple card (image + title/subtitle + buttons)
+    ".jb-card{max-width:82%;align-self:flex-start;border:1px solid " + colors.border + ";",
+    "border-radius:12px;overflow:hidden;background:" + colors.botBg + ";margin-top:2px;}",
+    ".jb-card img{width:100%;display:block;max-height:160px;object-fit:cover;}",
+    ".jb-card-body{padding:10px 12px;}",
+    ".jb-card-title{font-size:13.5px;font-weight:600;color:" + colors.text + ";}",
+    ".jb-card-sub{font-size:12px;color:" + colors.textMuted + ";margin-top:2px;}",
+    ".jb-card .jb-rich{padding:0 12px 10px;margin-top:0;max-width:100%;}",
+
+    // media messages (images/files)
+    ".jb-msg-media img{max-width:100%;border-radius:10px;display:block;margin-top:4px;cursor:pointer;}",
+    ".jb-msg-media a.jb-file-link{display:flex;align-items:center;gap:8px;margin-top:4px;",
+    "padding:8px 10px;border-radius:10px;background:rgba(127,127,127,.12);",
+    "color:inherit;text-decoration:none;font-size:13px;word-break:break-all;}",
+
+    // attach-media button (only shown once an agent has joined)
+    "#jb-attach{width:36px;height:36px;border-radius:50%;background:none;flex-shrink:0;",
+    "border:1px solid " + colors.border + ";cursor:pointer;display:none;align-items:center;justify-content:center;",
+    "transition:border-color .15s;}",
+    "#jb-attach.jb-show{display:flex;}",
+    "#jb-attach:hover{border-color:" + CONFIG.primaryColor + ";}",
+    "#jb-attach svg{width:16px;height:16px;stroke:" + colors.textMuted + ";fill:none;stroke-width:1.8;}",
+
+    // CSAT (post-resolution rating) prompt
+    "#jb-csat{align-self:center;max-width:92%;border:1px solid " + colors.border + ";border-radius:12px;",
+    "padding:12px 14px;background:" + colors.botBg + ";margin:6px 0;text-align:center;}",
+    "#jb-csat-label{font-size:12.5px;color:" + colors.text + ";margin-bottom:8px;}",
+    "#jb-csat-stars{display:flex;justify-content:center;gap:4px;}",
+    ".jb-star{cursor:pointer;background:none;border:none;padding:2px;line-height:1;}",
+    ".jb-star svg{width:22px;height:22px;fill:none;stroke:" + colors.textMuted + ";stroke-width:1.6;transition:fill .15s,stroke .15s;}",
+    ".jb-star.jb-star-active svg,.jb-star:hover svg{fill:" + CONFIG.primaryColor + ";stroke:" + CONFIG.primaryColor + ";}",
+    "#jb-csat-thanks{font-size:12.5px;color:" + colors.textMuted + ";}",
+
+    // language picker (shown in the header when >1 language is configured)
+    "#jb-lang{background:rgba(255,255,255,.2);color:#fff;border:none;border-radius:8px;",
+    "font-size:11px;padding:3px 6px;margin-right:2px;cursor:pointer;font-family:inherit;flex-shrink:0;}",
+    "#jb-lang option{color:#111;}",
   ].join("");
   document.head.appendChild(style);
 
@@ -464,6 +532,25 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     ? '<img src="' + esc(CONFIG.avatar) + '" alt="Bot avatar" />'
     : '<svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/></svg>';
 
+  // ---------- multi-language support ----------
+  var LANGS = CONFIG.languages || { default: "en", supported: ["en"], strings: { en: {} } };
+  var LANG_KEY = "jb_lang_" + PK;
+  var currentLang = storageGet(LANG_KEY) || LANGS.default || "en";
+  if (LANGS.supported.indexOf(currentLang) === -1) currentLang = LANGS.default || "en";
+  function t(key) {
+    var set = LANGS.strings[currentLang] || LANGS.strings[LANGS.default] || {};
+    return set[key] || key;
+  }
+
+  var langPickerHtml = "";
+  if (LANGS.supported.length > 1) {
+    langPickerHtml = '<select id="jb-lang" aria-label="' + esc(t("selectLanguage")) + '">' +
+      LANGS.supported.map(function (code) {
+        return '<option value="' + esc(code) + '"' + (code === currentLang ? " selected" : "") + '>' + esc(code.toUpperCase()) + '</option>';
+      }).join("") +
+      '</select>';
+  }
+
   win.innerHTML =
     '<div id="jb-resize-handle" title="Drag to resize">' +
       '<svg viewBox="0 0 12 12"><path d="M1 11L11 1M5 11L11 5M9 11L11 9"/></svg>' +
@@ -474,15 +561,20 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
         '<div id="jb-head-title">' + esc(CONFIG.title) + '</div>' +
         '<div id="jb-head-sub">&#x25CF; Online</div>' +
       '</div>' +
+      langPickerHtml +
       '<button id="jb-head-close" aria-label="Close chat">' +
         '<svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>' +
       '</button>' +
     '</div>' +
     '<div id="jb-msgs" role="log" aria-live="polite" aria-label="Chat messages"></div>' +
-    (CONFIG.hideBranding ? "" : '<div id="jb-powered">Powered by <a href="https://jestbot.ai" target="_blank" rel="noopener">JestBot</a></div>') +
+    (CONFIG.hideBranding ? "" : '<div id="jb-powered">' + esc(t("poweredBy")) + ' <a href="https://jestbot.ai" target="_blank" rel="noopener">JestBot</a></div>') +
     '<div id="jb-input-row">' +
-      '<textarea id="jb-input" rows="1" placeholder="Type a message..." aria-label="Message input"></textarea>' +
-      '<button id="jb-send" aria-label="Send message">' +
+      '<input id="jb-file-input" type="file" style="display:none" accept="image/*,.pdf,.doc,.docx,.txt,.csv,.xlsx,.ppt,.pptx" />' +
+      '<button id="jb-attach" type="button" aria-label="' + esc(t("attachFile")) + '" title="' + esc(t("attachFile")) + '">' +
+        '<svg viewBox="0 0 24 24"><path d="M21 12.5V7a4 4 0 0 0-8 0v9a2.5 2.5 0 0 0 5 0V9"/></svg>' +
+      '</button>' +
+      '<textarea id="jb-input" rows="1" placeholder="' + esc(t("inputPlaceholder")) + '" aria-label="Message input"></textarea>' +
+      '<button id="jb-send" aria-label="' + esc(t("send")) + '">' +
         '<svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>' +
       '</button>' +
     '</div>';
@@ -539,7 +631,10 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     handoverBarEl = document.createElement("div");
     handoverBarEl.id = "jb-handover-bar";
     handoverBarEl.className = "jb-hidden";
-    handoverBarEl.innerHTML = '<button id="jb-handover-btn" type="button">Talk to a human agent</button>';
+    var hoursNote = CONFIG.businessHoursDescription
+      ? '<div style="font-size:10px;color:' + colors.textMuted + ';text-align:center;margin-top:4px;">' + esc(CONFIG.businessHoursDescription) + '</div>'
+      : "";
+    handoverBarEl.innerHTML = '<button id="jb-handover-btn" type="button">' + esc(t("talkToHuman")) + '</button>' + hoursNote;
     win.appendChild(handoverBarEl);
   }
   var HANDOVER_THRESHOLD = Math.max(1, parseInt(AGENT_CONFIG.handoverMessageThreshold, 10) || 10);
@@ -570,6 +665,9 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   var sendBtn  = document.getElementById("jb-send");
   var closeBtn = document.getElementById("jb-head-close");
   var resizeHandleEl = document.getElementById("jb-resize-handle");
+  var attachBtn = document.getElementById("jb-attach");
+  var fileInputEl = document.getElementById("jb-file-input");
+  var langSelectEl = document.getElementById("jb-lang");
   var isOpen   = false;
   var isStreaming = false;
 
@@ -887,7 +985,83 @@ function continueChat(pickedSessionId) {
     msgsEl.appendChild(el);
   }
 
-  function addMessage(role, text, agentName) {
+  function renderMedia(container, media) {
+    if (!media) return;
+    var wrap = document.createElement("div");
+    wrap.className = "jb-msg-media";
+    if (media.kind === "image") {
+      var img = document.createElement("img");
+      img.src = media.url;
+      img.alt = media.fileName || "attachment";
+      img.addEventListener("click", function () { window.open(media.url, "_blank"); });
+      wrap.appendChild(img);
+    } else {
+      var a = document.createElement("a");
+      a.className = "jb-file-link";
+      a.href = media.url;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.5V7a4 4 0 0 0-8 0v9a2.5 2.5 0 0 0 5 0V9"/></svg>' +
+        '<span>' + esc(media.fileName || "Download attachment") + '</span>';
+      wrap.appendChild(a);
+    }
+    container.appendChild(wrap);
+  }
+
+  // Renders quick-reply chips / buttons / a card, either right after a
+  // message bubble (rich.type buttons/quick_replies) or as its own
+  // standalone element (rich.type card). Tapping a button sends its value
+  // as the visitor's next message.
+  function renderRichContent(rich, alignUser) {
+    if (!rich) return;
+
+    if (rich.type === "card") {
+      var card = document.createElement("div");
+      card.className = "jb-card";
+      if (rich.card && rich.card.imageUrl) {
+        var img = document.createElement("img");
+        img.src = rich.card.imageUrl;
+        card.appendChild(img);
+      }
+      if (rich.card && (rich.card.title || rich.card.subtitle)) {
+        var body = document.createElement("div");
+        body.className = "jb-card-body";
+        if (rich.card.title) body.innerHTML = '<div class="jb-card-title">' + esc(rich.card.title) + '</div>';
+        if (rich.card.subtitle) body.innerHTML += '<div class="jb-card-sub">' + esc(rich.card.subtitle) + '</div>';
+        card.appendChild(body);
+      }
+      msgsEl.appendChild(card);
+      if (rich.card && rich.card.buttons && rich.card.buttons.length) {
+        appendRichButtons(card, rich.card.buttons);
+      }
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+      return;
+    }
+
+    if ((rich.type === "buttons" || rich.type === "quick_replies") && rich.buttons && rich.buttons.length) {
+      var row = document.createElement("div");
+      row.className = "jb-rich" + (alignUser ? " jb-rich-user" : "");
+      msgsEl.appendChild(row);
+      appendRichButtons(row, rich.buttons);
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+    }
+  }
+
+  function appendRichButtons(container, buttons) {
+    buttons.forEach(function (b) {
+      var btn = document.createElement("button");
+      btn.className = "jb-rich-btn";
+      btn.type = "button";
+      btn.textContent = b.label;
+      btn.addEventListener("click", function () {
+        Array.prototype.forEach.call(container.querySelectorAll(".jb-rich-btn"), function (x) { x.disabled = true; });
+        sendMessage(b.value || b.label);
+      });
+      container.appendChild(btn);
+    });
+  }
+
+  function addMessage(role, text, agentName, msg) {
     var el = document.createElement("div");
     el.className = "jb-msg " + role;
     if (agentName) {
@@ -901,8 +1075,10 @@ function continueChat(pickedSessionId) {
     } else {
       el.textContent = text;
     }
+    if (msg && msg.media) renderMedia(el, msg.media);
     msgsEl.appendChild(el);
     msgsEl.scrollTop = msgsEl.scrollHeight;
+    if (msg && msg.richContent) renderRichContent(msg.richContent, role === "user");
     return el;
   }
 
@@ -936,7 +1112,7 @@ function continueChat(pickedSessionId) {
 
   function requestHandover() {
     var btn = document.getElementById("jb-handover-btn");
-    if (btn) { btn.disabled = true; btn.textContent = "Connecting..."; }
+    if (btn) { btn.disabled = true; btn.textContent = t("connecting"); }
 
     fetch(API_BASE + "/api/v1/chat/request-handover", {
       method: "POST",
@@ -945,14 +1121,21 @@ function continueChat(pickedSessionId) {
     }).then(function (r) {
       if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || "Could not connect to an agent"); });
       return r.json();
-    }).then(function () {
-      handoverStatus = "requested";
+    }).then(function (json) {
       addTimestamp();
-      addSystemMessage("Connecting you with an agent...");
+      if (json && json.data && json.data.offHours) {
+        // Outside business hours — no real handover was created. Just show
+        // the off-hours message and let the visitor keep chatting with the AI.
+        addSystemMessage(json.message);
+        if (btn) { btn.disabled = false; btn.textContent = t("talkToHuman"); }
+        return;
+      }
+      handoverStatus = "requested";
+      addSystemMessage(t("connectingAgent"));
       hideHandoverBar();
       openEventStream();
     }).catch(function (err) {
-      if (btn) { btn.disabled = false; btn.textContent = "Talk to a human agent"; }
+      if (btn) { btn.disabled = false; btn.textContent = t("talkToHuman"); }
       addSystemMessage(err.message || "Could not connect to an agent right now.");
     });
   }
@@ -995,10 +1178,14 @@ function continueChat(pickedSessionId) {
     if (data.status !== handoverStatus) {
       if (data.status === "assigned" && handoverStatus !== "assigned" && !isInitialLoad) {
         addTimestamp();
-        addSystemMessage(data.assignedAgentName ? "You're now connected with " + data.assignedAgentName + "." : "An agent has joined the chat.");
+        addSystemMessage(data.assignedAgentName ? "You're now connected with " + data.assignedAgentName + "." : t("agentJoined"));
       }
+      if (data.status === "assigned") showAttachButton();
       if (data.status === "resolved") {
         closeEventStream();
+        hideAttachButton();
+        if (!isInitialLoad) { addTimestamp(); addSystemMessage(t("chatResolved")); }
+        if (!data.csat) renderCsatPrompt();
       }
       handoverStatus = data.status;
       if (handoverStatus !== "none") hideHandoverBar();
@@ -1007,12 +1194,12 @@ function continueChat(pickedSessionId) {
     (data.messages || []).forEach(function (m) {
       if (m.role === "user") {
         if (isInitialLoad) {
-          addMessage("user", m.content);
+          addMessage("user", m.content, null, m);
           userMsgCount += 1;
         }
         return;
       }
-      addMessage("bot", m.content, m.via === "agent" ? (m.agentName || "Agent") : null);
+      addMessage("bot", m.content, m.via === "agent" ? (m.agentName || "Agent") : null, m);
       if (!isInitialLoad) playNotifySound();
     });
 
@@ -1082,7 +1269,7 @@ function continueChat(pickedSessionId) {
         "Content-Type": "application/json",
         "x-api-key": PK
       },
-      body: JSON.stringify({ message: text, sessionId: sessionId || undefined }),
+      body: JSON.stringify({ message: text, sessionId: sessionId || undefined, language: currentLang }),
     })
     .then(function (response) {
       if (!response.ok) {
@@ -1145,6 +1332,7 @@ function continueChat(pickedSessionId) {
                 removeTyping();
                 isStreaming = false;
                 playNotifySound();
+                if (payload.richContent) renderRichContent(payload.richContent, false);
               }
 
               if (eventName === "error") {
@@ -1159,7 +1347,7 @@ function continueChat(pickedSessionId) {
                 isStreaming = false;
                 if (payload.status === "requested" && handoverStatus === "none") {
                   handoverStatus = "requested";
-                  addSystemMessage("Connecting you with an agent...");
+                  addSystemMessage(t("connectingAgent"));
                   hideHandoverBar();
                 }
                 openEventStream();
@@ -1187,6 +1375,102 @@ function continueChat(pickedSessionId) {
   }
 
   sendBtn.addEventListener("click", sendMessage);
+
+  // ---------- media attach (only usable once an agent has joined) ----------
+  function showAttachButton() { if (attachBtn) attachBtn.classList.add("jb-show"); }
+  function hideAttachButton() { if (attachBtn) attachBtn.classList.remove("jb-show"); }
+
+  if (attachBtn && fileInputEl) {
+    attachBtn.addEventListener("click", function () { fileInputEl.click(); });
+
+    fileInputEl.addEventListener("change", function () {
+      var file = fileInputEl.files && fileInputEl.files[0];
+      fileInputEl.value = "";
+      if (!file) return;
+
+      attachBtn.disabled = true;
+      var isImg = file.type && file.type.indexOf("image/") === 0;
+      var localEl = addMessage("user", "", null, {
+        media: { url: URL.createObjectURL(file), kind: isImg ? "image" : "file", fileName: file.name },
+      });
+
+      var fd = new FormData();
+      fd.append("file", file);
+      fd.append("sessionId", sessionId);
+
+      fetch(API_BASE + "/api/v1/chat/media", { method: "POST", headers: { "x-api-key": PK }, body: fd })
+        .then(function (r) { return r.ok ? r.json() : r.json().then(function (d) { throw new Error(d.message); }); })
+        .then(function () { attachBtn.disabled = false; })
+        .catch(function (err) {
+          attachBtn.disabled = false;
+          if (localEl) localEl.remove();
+          addSystemMessage(err.message || "Couldn't send that file. Please try again.");
+        });
+    });
+  }
+
+  // ---------- language picker ----------
+  if (langSelectEl) {
+    langSelectEl.addEventListener("change", function () {
+      currentLang = langSelectEl.value;
+      storageSet(LANG_KEY, currentLang);
+      inputEl.placeholder = t("inputPlaceholder");
+      if (attachBtn) attachBtn.setAttribute("aria-label", t("attachFile"));
+    });
+  }
+
+  // ---------- CSAT (post-resolution rating) ----------
+  var csatShown = false;
+  function renderCsatPrompt() {
+    if (csatShown) return;
+    csatShown = true;
+
+    var wrap = document.createElement("div");
+    wrap.id = "jb-csat";
+    wrap.innerHTML =
+      '<div id="jb-csat-label">' + esc(t("rateChat")) + '</div>' +
+      '<div id="jb-csat-stars"></div>';
+    msgsEl.appendChild(wrap);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+
+    var starsEl = wrap.querySelector("#jb-csat-stars");
+    for (var i = 1; i <= 5; i++) {
+      (function (value) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "jb-star";
+        b.setAttribute("aria-label", value + " star" + (value > 1 ? "s" : ""));
+        b.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg>';
+        b.addEventListener("mouseenter", function () { highlightStars(starsEl, value); });
+        b.addEventListener("click", function () { submitCsat(value, wrap, starsEl); });
+        starsEl.appendChild(b);
+      })(i);
+    }
+    starsEl.addEventListener("mouseleave", function () { highlightStars(starsEl, 0); });
+  }
+
+  function highlightStars(starsEl, upTo) {
+    Array.prototype.forEach.call(starsEl.children, function (el, idx) {
+      el.classList.toggle("jb-star-active", idx < upTo);
+    });
+  }
+
+  function submitCsat(rating, wrap, starsEl) {
+    highlightStars(starsEl, rating);
+    Array.prototype.forEach.call(starsEl.children, function (el) { el.disabled = true; });
+
+    fetch(API_BASE + "/api/v1/chat/csat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": PK },
+      body: JSON.stringify({ sessionId: sessionId, rating: rating })
+    }).then(function (r) { return r.ok ? r.json() : null; })
+      .then(function () {
+        var thanks = document.createElement("div");
+        thanks.id = "jb-csat-thanks";
+        thanks.textContent = t("ratingThanks");
+        wrap.appendChild(thanks);
+      }).catch(function () {});
+  }
 
   inputEl.addEventListener("keydown", function (e) {
     if (e.key === "Enter" && !e.shiftKey) {

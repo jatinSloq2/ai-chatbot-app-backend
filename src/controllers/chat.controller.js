@@ -6,15 +6,37 @@ const llmService = require("../services/llm.service");
 const botService = require("../services/bot.service");
 const handoverService = require("../services/handover.service");
 const realtimeService = require("../services/realtime.service");
+const storageService = require("../services/storage.service");
+const { getLanguageName } = require("../utils/i18n");
 const Bot = require("../models/Bot");
 const { nanoid } = require("nanoid");
 const analyticsService = require("../services/analytics.service");
 const { setupSSE, sendEvent, startHeartbeat } = require("../utils/sse");
 
+// Appends a "please reply in <language>" instruction to the bot's system
+// prompt when the visitor isn't using the bot's default language. Left
+// untouched for "en"/unset so existing bots behave exactly as before.
+const withLanguageInstruction = (systemPrompt, languageCode) => {
+  if (!languageCode || languageCode === "en") return systemPrompt;
+  return `${systemPrompt}\n\nRespond in ${getLanguageName(languageCode)} (language code: ${languageCode}), regardless of what language the provided context is written in.`;
+};
+
+// Up to 5 quick-reply chips attached to the FIRST assistant reply in a
+// conversation, mirroring the bot's configured FAQs — turns the existing
+// "quick questions" feature into a proper structured rich-reply instead of
+// being purely a widget-side rendering trick.
+const buildQuickReplyRichContent = (bot, conversation) => {
+  const faqs = (bot.widgetConfig?.faqs || []).slice(0, 5);
+  if (!faqs.length) return null;
+  const alreadyReplied = conversation.messages.some((m) => m.role === "assistant");
+  if (alreadyReplied) return null;
+  return { type: "quick_replies", buttons: faqs.map((q) => ({ label: q, value: q })) };
+};
+
 // POST /api/v1/chat  (auth: bot public key)
 const chat = asyncHandler(async (req, res) => {
   const bot = req.bot;
-  const { message } = req.body;
+  const { message, language } = req.body;
   let { sessionId } = req.body;
 
   if (!message?.trim()) throw new ApiError(400, "message is required");
@@ -24,6 +46,14 @@ const chat = asyncHandler(async (req, res) => {
   let conversation = await Conversation.findOne({ bot: bot._id, sessionId });
   if (!conversation) {
     conversation = await Conversation.create({ bot: bot._id, sessionId, type: "widget", messages: [] });
+  }
+
+  // Visitor's language choice (multi-language support) — sticky on the
+  // conversation once set, updatable any time the widget sends a new one
+  // (e.g. the visitor switches languages mid-chat via the picker).
+  if (language && language !== conversation.visitor.language) {
+    conversation.visitor.language = language;
+    await conversation.save();
   }
 
   setupSSE(req, res, { "X-Session-Id": sessionId });
@@ -71,7 +101,7 @@ const chat = asyncHandler(async (req, res) => {
       content: m.content,
     }));
     const messages = ragService.buildRagMessages({
-      systemPrompt: bot.systemPrompt,
+      systemPrompt: withLanguageInstruction(bot.systemPrompt, conversation.visitor.language),
       relevantChunks,
       history: recentHistory,
       userMessage: message,
@@ -89,10 +119,11 @@ const chat = asyncHandler(async (req, res) => {
 
     // 4. Save conversation
     conversation.messages.push({ role: "user", content: message });
-    conversation.messages.push({ role: "assistant", content: fullResponse });
+    const richContent = buildQuickReplyRichContent(bot, conversation);
+    conversation.messages.push({ role: "assistant", content: fullResponse, richContent });
     await conversation.save();
 
-    sendEvent(res, "done", { fullResponse });
+    sendEvent(res, "done", { fullResponse, richContent });
   } catch (err) {
     success = false;
     errorMessage = err.message;
@@ -237,19 +268,31 @@ const testChat = asyncHandler(async (req, res) => {
     });
 
     // Also increment the bot's test counter atomically
-    Bot.findByIdAndUpdate(bot._id, { $inc: { testMessagesTotal: 1 } }).catch(() => {});
+    Bot.findByIdAndUpdate(bot._id, { $inc: { testMessagesTotal: 1 } }).catch(() => { });
   }
 });
 
 // POST /api/v1/chat/request-handover  (auth: bot public key)
 // body: { sessionId }
+// Outside business hours this still returns 200 — it's a normal, expected
+// outcome, not an error — but with offHours:true and a message the widget
+// shows in place of "Connecting you with an agent...".
 const requestHandover = asyncHandler(async (req, res) => {
   const bot = req.bot;
   const { sessionId } = req.body;
   if (!sessionId) throw new ApiError(400, "sessionId is required");
 
-  await handoverService.requestHandover(bot, sessionId);
-  res.status(200).json({ success: true, message: "We're connecting you with an agent" });
+  const result = await handoverService.requestHandover(bot, sessionId);
+
+  if (result.offHours) {
+    return res.status(200).json({
+      success: true,
+      message: result.message,
+      data: { offHours: true, hoursDescription: result.hoursDescription },
+    });
+  }
+
+  res.status(200).json({ success: true, message: "We're connecting you with an agent", data: { offHours: false } });
 });
 
 // GET /api/v1/chat/poll?sessionId=...&since=ISO_DATE  (auth: bot public key)
@@ -291,4 +334,54 @@ const streamChat = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { chat, testChat, requestHandover, pollChat, streamChat };
+// POST /api/v1/chat/media  (auth: bot public key, multipart "file")
+// Visitor media upload. Only accepted once a real agent is connected
+// (handover.status === "assigned") — before that there's no one on the
+// other end to receive it, and it keeps the AI path free of binary uploads
+// it has no way to reason about.
+const uploadVisitorMedia = asyncHandler(async (req, res) => {
+  const bot = req.bot;
+  const { sessionId, caption } = req.body;
+  if (!sessionId) throw new ApiError(400, "sessionId is required");
+  if (!req.file) throw new ApiError(400, "file is required");
+
+  const conversation = await Conversation.findOne({ bot: bot._id, sessionId });
+  if (!conversation) throw new ApiError(404, "Conversation not found");
+  if (conversation.handover.status !== "assigned") {
+    throw new ApiError(400, "Media can only be shared once an agent has joined the chat");
+  }
+
+  const media = await storageService.saveMedia({
+    ownerId: bot.user,
+    botId: bot._id,
+    actorType: "visitor",
+    actorId: sessionId,
+    file: req.file,
+  });
+
+  const updated = await handoverService.appendVisitorMedia(conversation, media, caption);
+  const saved = updated.messages[updated.messages.length - 1];
+
+  res.status(201).json({ success: true, data: { message: saved } });
+});
+
+// POST /api/v1/chat/csat  (auth: bot public key)
+// body: { sessionId, rating (1-5), comment? }
+const submitCsat = asyncHandler(async (req, res) => {
+  const bot = req.bot;
+  const { sessionId, rating, comment } = req.body;
+  if (!sessionId) throw new ApiError(400, "sessionId is required");
+
+  const conversation = await handoverService.submitCsat(bot, sessionId, Number(rating), comment);
+  res.status(200).json({ success: true, data: { csat: conversation.handover.csat } });
+});
+
+module.exports = {
+  chat,
+  testChat,
+  requestHandover,
+  pollChat,
+  streamChat,
+  uploadVisitorMedia,
+  submitCsat,
+};

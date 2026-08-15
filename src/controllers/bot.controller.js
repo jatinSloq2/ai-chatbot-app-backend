@@ -27,6 +27,7 @@ const sanitizeBot = (bot) => ({
   assignedAgents: bot.assignedAgents,
   assignedTeams: bot.assignedTeams,
   agentConfig: bot.agentConfig,
+  businessHours: bot.businessHours,
   isActive: bot.isActive,
   documentCount: bot.documentCount,
   messagesThisMonth: bot.messagesThisMonth,
@@ -172,7 +173,7 @@ const setModelConfig = asyncHandler(async (req, res) => {
 // handover is offered at all. Ownership of every agent/team ID is verified
 // against req.user so a bot can't be pointed at someone else's agents.
 const setAgentConfig = asyncHandler(async (req, res) => {
-  const { assignEnabled, assignedAgents, assignedTeams, handoverMessageThreshold } = req.body;
+  const { assignEnabled, assignedAgents, assignedTeams, handoverMessageThreshold, offHoursMessage } = req.body;
 
   const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
   if (!bot) throw new ApiError(404, "Bot not found");
@@ -205,6 +206,78 @@ const setAgentConfig = asyncHandler(async (req, res) => {
     bot.agentConfig.handoverMessageThreshold = Math.round(n);
   }
 
+  if (offHoursMessage !== undefined) {
+    bot.agentConfig.offHoursMessage = offHoursMessage?.trim() || bot.agentConfig.offHoursMessage;
+  }
+
+  await bot.save();
+  res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
+});
+
+const DAY_NUMS = [0, 1, 2, 3, 4, 5, 6];
+
+// POST /api/bots/:id/business-hours
+// body: { enabled?, timezone?, schedule?: [{day,enabled,start,end}] }
+// Configures when "Talk to a human agent" actually reaches a live agent.
+// Outside these hours the widget still shows the option, but requesting it
+// captures the visitor as a lead and shows agentConfig.offHoursMessage
+// instead (see handover.service.js#requestHandover).
+const setBusinessHours = asyncHandler(async (req, res) => {
+  const { enabled, timezone, schedule } = req.body;
+
+  const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
+  if (!bot) throw new ApiError(404, "Bot not found");
+
+  if (enabled !== undefined) bot.businessHours.enabled = !!enabled;
+  if (timezone !== undefined) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: timezone }); // throws on an invalid IANA name
+    } catch {
+      throw new ApiError(400, `"${timezone}" isn't a valid timezone (e.g. "Asia/Kolkata", "America/New_York")`);
+    }
+    bot.businessHours.timezone = timezone;
+  }
+  if (schedule !== undefined) {
+    if (!Array.isArray(schedule) || schedule.length === 0) {
+      throw new ApiError(400, "schedule must be a non-empty array");
+    }
+    const clean = schedule.map((s) => {
+      const day = Number(s.day);
+      if (!DAY_NUMS.includes(day)) throw new ApiError(400, "schedule[].day must be 0-6 (Sun-Sat)");
+      const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/;
+      const start = timeRe.test(s.start) ? s.start : "09:00";
+      const end = timeRe.test(s.end) ? s.end : "18:00";
+      return { day, enabled: !!s.enabled, start, end };
+    });
+    bot.businessHours.schedule = clean;
+  }
+
+  await bot.save();
+  res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
+});
+
+// POST /api/bots/:id/language-config
+// body: { defaultLanguage?, supportedLanguages?: string[] }
+const setLanguageConfig = asyncHandler(async (req, res) => {
+  const { defaultLanguage, supportedLanguages } = req.body;
+
+  const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
+  if (!bot) throw new ApiError(404, "Bot not found");
+
+  if (supportedLanguages !== undefined) {
+    if (!Array.isArray(supportedLanguages) || supportedLanguages.length === 0) {
+      throw new ApiError(400, "supportedLanguages must be a non-empty array of language codes");
+    }
+    bot.widgetConfig.supportedLanguages = supportedLanguages.slice(0, 10);
+  }
+  if (defaultLanguage !== undefined) {
+    const languages = bot.widgetConfig.supportedLanguages || ["en"];
+    if (!languages.includes(defaultLanguage)) {
+      throw new ApiError(400, `defaultLanguage must be one of the bot's supportedLanguages: ${languages.join(", ")}`);
+    }
+    bot.widgetConfig.defaultLanguage = defaultLanguage;
+  }
+
   await bot.save();
   res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
 });
@@ -218,4 +291,6 @@ module.exports = {
   regenerateKey,
   setModelConfig,
   setAgentConfig,
+  setBusinessHours,
+  setLanguageConfig,
 };

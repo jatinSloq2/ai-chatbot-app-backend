@@ -17,6 +17,8 @@ router.delete("/:id", botController.deleteBot);
 router.post("/:id/regenerate-key", botController.regenerateKey);
 router.post("/:id/model-config", botController.setModelConfig);
 router.post("/:id/agent-config", botController.setAgentConfig);
+router.post("/:id/business-hours", botController.setBusinessHours);
+router.post("/:id/language-config", botController.setLanguageConfig);
 router.post("/:id/test-chat", chatController.testChat);
 
 // Conversations

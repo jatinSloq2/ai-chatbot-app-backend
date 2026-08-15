@@ -3,6 +3,7 @@ const router = express.Router();
 
 const agentAuthController = require("../controllers/agentAuth.controller");
 const { protectAgent } = require("../middlewares/agentAuth.middleware");
+const { mediaUpload } = require("../middlewares/upload.middleware");
 
 // Public (no agent session yet)
 router.post("/login", agentAuthController.login);
@@ -29,7 +30,19 @@ router.post("/handovers/:conversationId/accept", agentAuthController.acceptHando
 
 router.get("/conversations/:conversationId", agentAuthController.getMyConversation);
 router.post("/conversations/:conversationId/message", agentAuthController.sendAgentMessage);
+router.post(
+  "/conversations/:conversationId/media",
+  mediaUpload.single("file"),
+  agentAuthController.sendAgentMedia
+);
 router.post("/conversations/:conversationId/resolve", agentAuthController.resolveConversation);
+
+// Canned responses (saved replies / macros) usable in the agent panel.
+router.get("/canned-responses", agentAuthController.listCannedResponses);
+router.post(
+  "/conversations/:conversationId/canned-responses/:cannedId/send",
+  agentAuthController.sendCannedResponse
+);
 
 router.get("/stream", agentAuthController.stream);
 

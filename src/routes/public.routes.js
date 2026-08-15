@@ -8,7 +8,7 @@ const chatController = require("../controllers/chat.controller");
 const widgetController = require("../controllers/widget.controller");
 const leadController = require("../controllers/lead.controller");
 const { requireBotSecretKey, requireBotPublicKey } = require("../middlewares/botAuth.middleware");
-const { upload } = require("../middlewares/upload.middleware");
+const { upload, mediaUpload } = require("../middlewares/upload.middleware");
 
 // Open CORS for all widget-facing endpoints
 const widgetCors = cors({
@@ -44,6 +44,23 @@ router.get("/chat/poll", widgetCors, requireBotPublicKey, chatController.pollCha
 
 router.options("/chat/stream", widgetCors);
 router.get("/chat/stream", widgetCors, requireBotPublicKey, chatController.streamChat);
+
+// Visitor media upload — only accepted once an agent has joined (enforced
+// in the controller, since it needs to inspect the conversation's handover
+// status, not just the bot).
+router.options("/chat/media", widgetCors);
+router.post(
+  "/chat/media",
+  widgetCors,
+  chatLimiter,
+  requireBotPublicKey,
+  mediaUpload.single("file"),
+  chatController.uploadVisitorMedia
+);
+
+// CSAT rating — submitted once, right after an agent resolves the chat.
+router.options("/chat/csat", widgetCors);
+router.post("/chat/csat", widgetCors, chatLimiter, requireBotPublicKey, chatController.submitCsat);
 
 // --- Lead capture (public key, called by widget pre-chat form) ---
 const leadLimiter = rateLimit({ windowMs: 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false });

@@ -4,8 +4,10 @@ const agentService = require("../services/agent.service");
 const notificationService = require("../services/notification.service");
 const handoverService = require("../services/handover.service");
 const realtimeService = require("../services/realtime.service");
+const storageService = require("../services/storage.service");
 const { setupSSE, sendEvent, startHeartbeat } = require("../utils/sse");
 const Agent = require("../models/Agent");
+const CannedResponse = require("../models/CannedResponse");
 const {
   verifyRefreshToken,
   generateAgentAccessToken,
@@ -186,9 +188,20 @@ const sanitizeConversation = (c) => ({
     requestedAt: c.handover.requestedAt,
     assignedAt: c.handover.assignedAt,
     resolvedAt: c.handover.resolvedAt,
+    csat: c.handover.csat,
   },
   createdAt: c.createdAt,
   updatedAt: c.updatedAt,
+});
+
+const sanitizeCanned = (c) => ({
+  id: c._id,
+  bot: c.bot,
+  title: c.title,
+  shortcut: c.shortcut,
+  content: c.content,
+  media: c.media,
+  richContent: c.richContent,
 });
 
 // GET /api/agent-auth/handovers/pending — the pool of unclaimed chats this
@@ -217,11 +230,73 @@ const getMyConversation = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { conversation: sanitizeConversation(conversation) } });
 });
 
-// POST /api/agent-auth/conversations/:conversationId/message  body: { message }
+// POST /api/agent-auth/conversations/:conversationId/message
+// body: { message, richContent? }
 const sendAgentMessage = asyncHandler(async (req, res) => {
-  const { message } = req.body;
+  const { message, richContent } = req.body;
   if (!message?.trim()) throw new ApiError(400, "message is required");
-  const conversation = await handoverService.sendAgentMessage(req.agent, req.params.conversationId, message);
+  const conversation = await handoverService.sendAgentMessage(req.agent, req.params.conversationId, message, {
+    richContent: richContent || null,
+  });
+  res.status(200).json({ success: true, data: { conversation: sanitizeConversation(conversation) } });
+});
+
+// POST /api/agent-auth/conversations/:conversationId/media  (multipart "file")
+// body (form fields): caption?
+// Media the AGENT sends to the visitor — separate from the visitor's own
+// upload endpoint (chat.controller.js#uploadVisitorMedia), and available any
+// time the conversation is assigned to this agent (no business-hours or
+// "agent connected" gate needed here — the agent obviously already is one).
+const sendAgentMedia = asyncHandler(async (req, res) => {
+  if (!req.file) throw new ApiError(400, "file is required");
+
+  const conversation = await handoverService.getMyConversation(req.agent._id, req.params.conversationId);
+
+  const media = await storageService.saveMedia({
+    ownerId: req.agent.owner,
+    botId: conversation.bot._id || conversation.bot,
+    actorType: "agent",
+    actorId: req.agent._id,
+    file: req.file,
+  });
+
+  const updated = await handoverService.sendAgentMessage(req.agent, req.params.conversationId, req.body.caption || "", {
+    media,
+  });
+  res.status(201).json({ success: true, data: { conversation: sanitizeConversation(updated) } });
+});
+
+// GET /api/agent-auth/canned-responses?botId=...
+// Every canned response the agent's owner has defined that's usable here —
+// shared macros (bot: null) plus ones scoped to this specific bot.
+const listCannedResponses = asyncHandler(async (req, res) => {
+  const { botId } = req.query;
+  const query = { owner: req.agent.owner };
+  if (botId) query.$or = [{ bot: botId }, { bot: null }];
+
+  const items = await CannedResponse.find(query).sort({ title: 1 });
+  res.status(200).json({ success: true, data: { cannedResponses: items.map(sanitizeCanned) } });
+});
+
+// POST /api/agent-auth/conversations/:conversationId/canned-responses/:cannedId/send
+// Sends a saved reply (text + any attached media/richContent) as this
+// agent's message in one shot, and bumps its usage counter.
+const sendCannedResponse = asyncHandler(async (req, res) => {
+  const canned = await CannedResponse.findOne({ _id: req.params.cannedId, owner: req.agent.owner });
+  if (!canned) throw new ApiError(404, "Canned response not found");
+
+  let conversation = await handoverService.sendAgentMessage(req.agent, req.params.conversationId, canned.content, {
+    richContent: canned.richContent || null,
+    cannedResponseId: canned._id,
+    media: canned.media?.[0] || null, // primary attachment goes on the text message itself
+  });
+
+  // Any additional attachments beyond the first go out as their own
+  // media-only follow-up messages, in order.
+  for (const extra of (canned.media || []).slice(1)) {
+    conversation = await handoverService.sendAgentMessage(req.agent, req.params.conversationId, "", { media: extra });
+  }
+
   res.status(200).json({ success: true, data: { conversation: sanitizeConversation(conversation) } });
 });
 
@@ -273,6 +348,9 @@ module.exports = {
   acceptHandover,
   getMyConversation,
   sendAgentMessage,
+  sendAgentMedia,
+  listCannedResponses,
+  sendCannedResponse,
   resolveConversation,
   stream,
 };

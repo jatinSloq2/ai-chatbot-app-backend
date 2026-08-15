@@ -91,6 +91,20 @@ const botSchema = new mongoose.Schema(
       // When true AND the owner's plan allows it, the "Powered by JestBot"
       // footer is omitted from the embedded widget.
       hideBranding: { type: Boolean, default: false },
+
+      // --- Multiple language support ---
+      // Default language the widget boots in (visitor can switch via the
+      // in-widget language picker when more than one is supported). Also
+      // used to pick which translated UI-string set the widget script and
+      // handover.service system messages render.
+      defaultLanguage: { type: String, default: "en" },
+      // Languages the visitor can pick from. The AI is instructed to reply
+      // in whichever language the visitor is currently set to.
+      supportedLanguages: {
+        type: [String],
+        default: ["en"],
+        validate: { validator: (arr) => arr.length <= 10, message: "Up to 10 languages" },
+      },
     },
 
     // --- Pre-chat lead capture (widget) ---
@@ -125,6 +139,50 @@ const botSchema = new mongoose.Schema(
       // shot first. Configurable per bot, shown next to the agent/team
       // selection in the dashboard.
       handoverMessageThreshold: { type: Number, default: 10, min: 1, max: 50 },
+      // Shown to the visitor when they ask for a human outside business
+      // hours (see businessHours below) instead of connecting them.
+      offHoursMessage: {
+        type: String,
+        default:
+          "As of now, no agent is available — these are our off hours. You can continue chatting with our AI assistant, and we'll follow up by email as soon as we're back.",
+      },
+    },
+
+    // --- Business hours (human handover) ---
+    // When enabled, "Talk to a human agent" is only actually offered a live
+    // agent during the configured windows. Outside those windows the widget
+    // still shows the option (so visitors aren't confused about why it's
+    // gone), but requesting it captures a lead and returns agentConfig's
+    // offHoursMessage instead of creating a real handover request.
+    businessHours: {
+      enabled: { type: Boolean, default: false },
+      // IANA timezone the schedule below is interpreted in, e.g.
+      // "Asia/Kolkata", "America/New_York". Defaults to UTC so an
+      // unconfigured bot behaves predictably.
+      timezone: { type: String, default: "UTC" },
+      // One entry per weekday (0=Sunday..6=Saturday). `start`/`end` are
+      // "HH:mm" 24h local time in `timezone`. A day with enabled:false has
+      // no live-agent hours at all that day.
+      schedule: {
+        type: [
+          {
+            _id: false,
+            day: { type: Number, min: 0, max: 6, required: true },
+            enabled: { type: Boolean, default: true },
+            start: { type: String, default: "09:00" },
+            end: { type: String, default: "18:00" },
+          },
+        ],
+        default: [
+          { day: 0, enabled: false, start: "09:00", end: "18:00" },
+          { day: 1, enabled: true, start: "09:00", end: "18:00" },
+          { day: 2, enabled: true, start: "09:00", end: "18:00" },
+          { day: 3, enabled: true, start: "09:00", end: "18:00" },
+          { day: 4, enabled: true, start: "09:00", end: "18:00" },
+          { day: 5, enabled: true, start: "09:00", end: "18:00" },
+          { day: 6, enabled: false, start: "09:00", end: "18:00" },
+        ],
+      },
     },
 
     isActive: { type: Boolean, default: true },

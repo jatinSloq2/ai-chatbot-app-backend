@@ -4,6 +4,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
+const { MEDIA_ROOT, PUBLIC_PREFIX } = require("./services/storage.service");
 
 const routes = require("./routes");
 const { notFound, errorHandler } = require("./middlewares/error.middleware");
@@ -83,6 +84,20 @@ app.get("/health", (req, res) => {
 });
 
 app.get("/widget.js", widgetController.serveWidgetScript);
+
+// Chat/canned-response media (uploaded via storage.service.js) — served
+// statically, open CORS since the embedded widget can be on any origin.
+// URLs already contain a random, unguessable filename component, and
+// nothing sensitive (documents, secrets) is ever written under this root.
+app.use(
+  PUBLIC_PREFIX,
+  (req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    next();
+  },
+  express.static(MEDIA_ROOT)
+);
 
 app.use("/api", routes);
 
