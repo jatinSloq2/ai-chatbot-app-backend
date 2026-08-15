@@ -1,15 +1,31 @@
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const Bot = require("../models/Bot");
+const botService = require("../services/bot.service");
+
+// Custom branding (hiding "Powered by JestBot") is a paid-plan feature.
+// Re-checked against the owner's LIVE plan here rather than trusting the
+// saved widgetConfig.hideBranding flag alone, so a downgrade takes effect
+// immediately on every bot without needing to touch each one.
+const resolveBrandingHidden = async (bot) => {
+  if (!bot.widgetConfig?.hideBranding) return false;
+  try {
+    const plan = await botService.getActivePlan(bot.user);
+    return !!plan.limits?.customBranding;
+  } catch {
+    return false;
+  }
+};
 
 // GET /api/v1/widget/config  (auth: public key)
 const getWidgetConfig = asyncHandler(async (req, res) => {
   const bot = req.bot;
+  const hideBranding = await resolveBrandingHidden(bot);
   res.status(200).json({
     success: true,
     data: {
       name: bot.name,
-      widgetConfig: bot.widgetConfig,
+      widgetConfig: { ...(bot.widgetConfig?.toObject ? bot.widgetConfig.toObject() : bot.widgetConfig), hideBranding },
       leadConfig: bot.leadConfig,
       agentConfig: bot.agentConfig,
       isActive: bot.isActive,
@@ -43,6 +59,7 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
 
   // Merge saved config with per-embed query-string overrides
   const savedConfig = bot.widgetConfig || {};
+  const hideBranding = await resolveBrandingHidden(bot);
   const config = {
     title: req.query.title || savedConfig.title || "Chat with us",
     primaryColor: req.query.color || savedConfig.primaryColor || "#f97316",
@@ -63,6 +80,9 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
     launcherStyle: savedConfig.launcherStyle || "icon",
     launcherText: savedConfig.launcherText || "Chat with us",
     soundEnabled: savedConfig.soundEnabled !== false,
+    // Custom branding — omit the "Powered by JestBot" footer. Only true
+    // when BOTH the owner opted in AND their live plan allows it.
+    hideBranding: hideBranding,
     // Pre-chat lead capture form settings (name/email/phone + verification)
     leadConfig: bot.leadConfig || {
       enabled: false,
@@ -351,6 +371,22 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     "#jb-lead-otp.show{display:flex;}",
     "#jb-lead-otp-msg{font-size:12px;color:" + colors.textMuted + ";}",
 
+    // "continue a previous chat" chooser — shown after OTP verification
+    // only when the now-verified visitor has past verified conversations.
+    "#jb-lead-history{display:none;flex-direction:column;gap:10px;}",
+    "#jb-lead-history.show{display:flex;}",
+    "#jb-lead-history-msg{font-size:12px;color:" + colors.textMuted + ";}",
+    "#jb-lead-history-list{display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;}",
+    ".jb-lhi{display:flex;flex-direction:column;gap:2px;text-align:left;width:100%;box-sizing:border-box;",
+    "background:" + colors.inputBg + ";border:1px solid " + colors.border + ";border-radius:10px;",
+    "padding:9px 12px;cursor:pointer;font-family:inherit;transition:border-color .15s;}",
+    ".jb-lhi:hover{border-color:" + CONFIG.primaryColor + ";}",
+    ".jb-lhi-preview{font-size:13px;color:" + colors.text + ";overflow:hidden;",
+    "text-overflow:ellipsis;white-space:nowrap;}",
+    ".jb-lhi-meta{font-size:11px;color:" + colors.textMuted + ";}",
+    "#jb-lead-history-new{background:none!important;color:" + CONFIG.primaryColor + "!important;",
+    "font-weight:500!important;padding:0!important;text-decoration:underline;align-self:flex-start;}",
+
     // human handover
     "#jb-handover-bar{padding:8px 12px;border-top:1px solid " + colors.border + ";",
     "background:" + colors.bg + ";flex-shrink:0;}",
@@ -443,7 +479,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
       '</button>' +
     '</div>' +
     '<div id="jb-msgs" role="log" aria-live="polite" aria-label="Chat messages"></div>' +
-    '<div id="jb-powered">Powered by <a href="https://jestbot.ai" target="_blank" rel="noopener">JestBot</a></div>' +
+    (CONFIG.hideBranding ? "" : '<div id="jb-powered">Powered by <a href="https://jestbot.ai" target="_blank" rel="noopener">JestBot</a></div>') +
     '<div id="jb-input-row">' +
       '<textarea id="jb-input" rows="1" placeholder="Type a message..." aria-label="Message input"></textarea>' +
       '<button id="jb-send" aria-label="Send message">' +
@@ -482,6 +518,11 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
       '<div id="jb-lead-otp-err"></div>' +
       '<button id="jb-lead-verify" type="button">Verify &amp; continue</button>' +
       '<button id="jb-lead-resend" type="button">Resend code</button>' +
+    '</div>' +
+    '<div id="jb-lead-history">' +
+      '<div id="jb-lead-history-msg">Welcome back! Continue a previous conversation, or start a new one.</div>' +
+      '<div id="jb-lead-history-list"></div>' +
+      '<button id="jb-lead-history-new" type="button">Start a new conversation</button>' +
     '</div>';
 
   var leadEl = document.createElement("div");
@@ -545,6 +586,12 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   var leadResendBtn = document.getElementById("jb-lead-resend");
   var leadTarget    = null; // { type: "email"|"phone", value: "..." }
 
+  // "Continue a previous chat" chooser — only ever populated for a
+  // verified lead (see leadVerify below); unverified visitors never see it.
+  var leadHistoryPanel = document.getElementById("jb-lead-history");
+  var leadHistoryList  = document.getElementById("jb-lead-history-list");
+  var leadHistoryNewBtn = document.getElementById("jb-lead-history-new");
+
   var FAQS = (CONFIG.faqs || []).slice(0, 5);
 
   function removeFaqBubbles() {
@@ -593,6 +640,41 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     win.classList.add("jb-mode-chat");
     showWelcome();
     setTimeout(function () { inputEl.focus(); }, 100);
+  }
+
+  // Visitor picked a past chat from the "continue a previous conversation"
+  // list — switch the active sessionId to it and hydrate its full
+  // transcript via loadHistory() (defined further below) instead of
+  // showing the welcome message for what would look like a fresh chat.
+  function continueChat(pickedSessionId) {
+    sessionId = pickedSessionId;
+    sessionStorageSet(SK, sessionId);
+    storageSet(LEAD_DONE_KEY, "1");
+    leadDone = true;
+    win.classList.remove("jb-mode-lead");
+    win.classList.add("jb-mode-chat");
+    loadHistory(); // hydrates past messages; falls back to showWelcome() if empty
+    setTimeout(function () { inputEl.focus(); }, 100);
+  }
+
+  function renderLeadHistory(previousChats) {
+    leadHistoryList.innerHTML = "";
+    previousChats.forEach(function (c) {
+      var item = document.createElement("button");
+      item.type = "button";
+      item.className = "jb-lhi";
+      var when = "";
+      try { when = new Date(c.lastActivityAt).toLocaleDateString([], { month: "short", day: "numeric" }); } catch (e) {}
+      item.innerHTML =
+        '<span class="jb-lhi-preview">' + esc(c.lastMessage || "(no messages yet)") + '</span>' +
+        '<span class="jb-lhi-meta">' + c.messageCount + ' message' + (c.messageCount === 1 ? "" : "s") +
+        (when ? " &middot; " + esc(when) : "") + '</span>';
+      item.addEventListener("click", function () { continueChat(c.sessionId); });
+      leadHistoryList.appendChild(item);
+    });
+    leadFormPanel.style.display = "none";
+    leadOtpPanel.classList.remove("show");
+    leadHistoryPanel.classList.add("show");
   }
 
   function leadSubmit() {
@@ -664,8 +746,15 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     }).then(function (r) {
       if (!r.ok) return r.json().then(function (d) { throw new Error(d.message || "Invalid code"); });
       return r.json();
-    }).then(function () {
-      leadComplete();
+    }).then(function (res) {
+      // Only a verified identifier can ever surface previousChats — the
+      // backend only returns them from this endpoint, after OTP success.
+      var previousChats = (res.data && res.data.previousChats) || [];
+      if (previousChats.length > 0) {
+        renderLeadHistory(previousChats);
+      } else {
+        leadComplete();
+      }
     }).catch(function (err) {
       leadOtpErr.textContent = err.message || "Invalid code. Please try again.";
       leadVerifyBtn.disabled = false;
@@ -692,6 +781,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   if (leadSubmitBtn) leadSubmitBtn.addEventListener("click", leadSubmit);
   if (leadVerifyBtn) leadVerifyBtn.addEventListener("click", leadVerify);
   if (leadResendBtn) leadResendBtn.addEventListener("click", leadResend);
+  if (leadHistoryNewBtn) leadHistoryNewBtn.addEventListener("click", function () { leadComplete(); });
   if (leadNameEl) leadNameEl.addEventListener("keydown", function (e) {
     if (e.key === "Enter") { e.preventDefault(); leadSubmit(); }
   });

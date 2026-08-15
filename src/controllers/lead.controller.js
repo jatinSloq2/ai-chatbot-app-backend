@@ -79,12 +79,45 @@ const verifyLeadOtp = asyncHandler(async (req, res) => {
     ? { "visitor.emailVerified": true }
     : { "visitor.phoneVerified": true };
 
-  await Conversation.findOneAndUpdate(
+  const conversation = await Conversation.findOneAndUpdate(
     { bot: bot._id, sessionId },
-    { $set: updateField }
+    { $set: updateField },
+    { new: true }
   );
 
-  res.status(200).json({ success: true, message: `${type} verified` });
+  // Once the visitor's identifier is verified, look up their other
+  // verified conversations on this bot so the widget can offer to
+  // continue a past chat. Deliberately gated on verifiedField:true — an
+  // unverified email/phone (e.g. someone typing in a stranger's address)
+  // never unlocks anyone else's chat history.
+  let previousChats = [];
+  const identifierValue = type === "email" ? conversation?.visitor?.email : conversation?.visitor?.phone;
+
+  if (identifierValue) {
+    const matchField = type === "email" ? "visitor.email" : "visitor.phone";
+    const verifiedField = type === "email" ? "visitor.emailVerified" : "visitor.phoneVerified";
+
+    const past = await Conversation.find({
+      bot: bot._id,
+      type: "widget",
+      sessionId: { $ne: sessionId },
+      [matchField]: identifierValue,
+      [verifiedField]: true,
+    })
+      .sort({ updatedAt: -1 })
+      .limit(10)
+      .select("sessionId messages createdAt updatedAt");
+
+    previousChats = past.map((c) => ({
+      sessionId: c.sessionId,
+      messageCount: c.messages.length,
+      lastMessage: c.messages[c.messages.length - 1]?.content?.slice(0, 120) || "",
+      startedAt: c.createdAt,
+      lastActivityAt: c.updatedAt,
+    }));
+  }
+
+  res.status(200).json({ success: true, message: `${type} verified`, data: { previousChats } });
 });
 
 module.exports = { submitLead, sendLeadOtp, verifyLeadOtp };

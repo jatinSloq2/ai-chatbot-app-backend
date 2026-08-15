@@ -84,6 +84,13 @@ const botSchema = new mongoose.Schema(
       // widget is closed or the tab isn't focused. No audio file — the
       // script synthesizes it with the Web Audio API.
       soundEnabled: { type: Boolean, default: true },
+
+      // --- Custom branding (paid plans only — enforced server-side against
+      // the bot owner's live plan at both save-time and widget-render-time,
+      // so a downgrade takes effect immediately even if this stays true) ---
+      // When true AND the owner's plan allows it, the "Powered by JestBot"
+      // footer is omitted from the embedded widget.
+      hideBranding: { type: Boolean, default: false },
     },
 
     // --- Pre-chat lead capture (widget) ---
