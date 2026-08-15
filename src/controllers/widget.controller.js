@@ -502,15 +502,20 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     win.appendChild(handoverBarEl);
   }
   var HANDOVER_THRESHOLD = Math.max(1, parseInt(AGENT_CONFIG.handoverMessageThreshold, 10) || 10);
-  var MSG_COUNT_KEY = "jb_msgcount_" + PK;
-  var NUDGE_SHOWN_KEY = "jb_handover_nudged_" + PK;
-  var userMsgCount = parseInt(storageGet(MSG_COUNT_KEY), 10) || 0;
+  // Session-scoped (not localStorage) — these count messages in THIS
+  // conversation only. Tied to the same lifecycle as sessionId (SK), so a
+  // new session always starts the threshold fresh, instead of a browser
+  // that crossed the threshold once, ever, immediately showing the human
+  // handover option on every future conversation.
+  var MSG_COUNT_KEY = "jb_msgcount_" + SK;
+  var NUDGE_SHOWN_KEY = "jb_handover_nudged_" + SK;
+  var userMsgCount = parseInt(sessionStorageGet(MSG_COUNT_KEY), 10) || 0;
 
   function revealHandoverBar() {
     if (!handoverBarEl || handoverStatus !== "none") return;
     handoverBarEl.classList.remove("jb-hidden");
-    if (storageGet(NUDGE_SHOWN_KEY) !== "1") {
-      storageSet(NUDGE_SHOWN_KEY, "1");
+    if (sessionStorageGet(NUDGE_SHOWN_KEY) !== "1") {
+      sessionStorageSet(NUDGE_SHOWN_KEY, "1");
       addSystemMessage("Still need help? You can connect with a human agent below.");
     }
   }
@@ -922,7 +927,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     });
 
     if (isInitialLoad) {
-      storageSet(MSG_COUNT_KEY, String(userMsgCount));
+      sessionStorageSet(MSG_COUNT_KEY, String(userMsgCount));
       maybeRevealHandoverBar();
     }
   }
@@ -976,7 +981,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     isStreaming = true;
 
     userMsgCount += 1;
-    storageSet(MSG_COUNT_KEY, String(userMsgCount));
+    sessionStorageSet(MSG_COUNT_KEY, String(userMsgCount));
     maybeRevealHandoverBar();
 
     var botEl = null;
