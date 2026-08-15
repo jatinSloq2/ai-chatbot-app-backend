@@ -422,7 +422,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     sessionStorageSet(SK, sessionId);
   }
 
-  var leadDone = !LEAD.enabled || storageGet(LEAD_DONE_KEY) === "1";
+  var leadDone = !LEAD.enabled || sessionStorageGet(LEAD_DONE_KEY) === "1";
 
   // ---------- human handover state ----------
   var AGENT_CONFIG = CONFIG.agentConfig || { assignEnabled: false };
@@ -634,7 +634,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   }
 
   function leadComplete() {
-    storageSet(LEAD_DONE_KEY, "1");
+    sessionStorageGet(LEAD_DONE_KEY, "1");
     leadDone = true;
     win.classList.remove("jb-mode-lead");
     win.classList.add("jb-mode-chat");
@@ -649,7 +649,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   function continueChat(pickedSessionId) {
     sessionId = pickedSessionId;
     sessionStorageSet(SK, sessionId);
-    storageSet(LEAD_DONE_KEY, "1");
+    sessionStorageGet(LEAD_DONE_KEY, "1");
     leadDone = true;
     win.classList.remove("jb-mode-lead");
     win.classList.add("jb-mode-chat");
