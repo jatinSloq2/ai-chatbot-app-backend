@@ -12,7 +12,7 @@ const LLM_PROVIDERS = {
   openai: {
     label: "OpenAI",
     requiresApiKey: true,
-    models: ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+    models: ["gpt-5.6", "gpt-5.6-mini", "gpt-5.4-nano", "gpt-4o-mini"],
   },
   anthropic: {
     label: "Anthropic",
@@ -22,17 +22,17 @@ const LLM_PROVIDERS = {
   google: {
     label: "Google Gemini",
     requiresApiKey: true,
-    models: ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"],
+    models: ["gemini-flash-latest", "gemini-3.5-flash", "gemini-3.5-flash-lite"],
   },
   groq: {
     label: "Groq (fast inference)",
     requiresApiKey: true,
-    models: ["llama-3.1-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"],
+    models: ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"],
   },
   mistral: {
     label: "Mistral AI",
     requiresApiKey: true,
-    models: ["mistral-large-latest", "mistral-small-latest", "open-mixtral-8x7b"],
+    models: ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"],
   },
 };
 
@@ -52,14 +52,14 @@ const EMBEDDING_PROVIDERS = {
     models: {
       "text-embedding-3-small": 1536,
       "text-embedding-3-large": 3072,
-      "text-embedding-ada-002": 1536,
+      "text-embedding-ada-002": 1536, // legacy but still served; keep only if you want backward compat for old bots
     },
   },
   google: {
     label: "Google Gemini",
     requiresApiKey: true,
     models: {
-      "text-embedding-004": 768,
+      "gemini-embedding-001": 3072,
     },
   },
 };
