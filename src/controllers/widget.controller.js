@@ -633,29 +633,29 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
     showFaqs();
   }
 
-  function leadComplete() {
-    sessionStorageGet(LEAD_DONE_KEY, "1");
-    leadDone = true;
-    win.classList.remove("jb-mode-lead");
-    win.classList.add("jb-mode-chat");
-    showWelcome();
-    setTimeout(function () { inputEl.focus(); }, 100);
-  }
+function leadComplete() {
+  sessionStorageSet(LEAD_DONE_KEY, "1");   // was: sessionStorageGet(LEAD_DONE_KEY, "1")
+  leadDone = true;
+  win.classList.remove("jb-mode-lead");
+  win.classList.add("jb-mode-chat");
+  showWelcome();
+  setTimeout(function () { inputEl.focus(); }, 100);
+}
 
   // Visitor picked a past chat from the "continue a previous conversation"
   // list — switch the active sessionId to it and hydrate its full
   // transcript via loadHistory() (defined further below) instead of
   // showing the welcome message for what would look like a fresh chat.
-  function continueChat(pickedSessionId) {
-    sessionId = pickedSessionId;
-    sessionStorageSet(SK, sessionId);
-    sessionStorageGet(LEAD_DONE_KEY, "1");
-    leadDone = true;
-    win.classList.remove("jb-mode-lead");
-    win.classList.add("jb-mode-chat");
-    loadHistory(); // hydrates past messages; falls back to showWelcome() if empty
-    setTimeout(function () { inputEl.focus(); }, 100);
-  }
+function continueChat(pickedSessionId) {
+  sessionId = pickedSessionId;
+  sessionStorageSet(SK, sessionId);
+  sessionStorageSet(LEAD_DONE_KEY, "1");   // was: sessionStorageGet(LEAD_DONE_KEY, "1")
+  leadDone = true;
+  win.classList.remove("jb-mode-lead");
+  win.classList.add("jb-mode-chat");
+  loadHistory();
+  setTimeout(function () { inputEl.focus(); }, 100);
+}
 
   function renderLeadHistory(previousChats) {
     leadHistoryList.innerHTML = "";
