@@ -76,7 +76,32 @@ const updateBot = asyncHandler(async (req, res) => {
   if (systemPrompt !== undefined) bot.systemPrompt = systemPrompt;
   if (allowedDomains !== undefined) bot.allowedDomains = allowedDomains;
   if (isActive !== undefined) bot.isActive = isActive;
-  if (widgetConfig !== undefined) bot.widgetConfig = { ...bot.widgetConfig, ...widgetConfig };
+  if (widgetConfig !== undefined) {
+    const merged = { ...(bot.widgetConfig.toObject ? bot.widgetConfig.toObject() : bot.widgetConfig), ...widgetConfig };
+    if (widgetConfig.faqs !== undefined) {
+      // Up to 5 non-empty quick questions, trimmed, order preserved.
+      merged.faqs = (widgetConfig.faqs || [])
+        .map((q) => (typeof q === "string" ? q.trim() : ""))
+        .filter(Boolean)
+        .slice(0, 5);
+    }
+    if (widgetConfig.theme !== undefined && !["light", "dark", "auto"].includes(widgetConfig.theme)) {
+      merged.theme = "light";
+    }
+    if (
+      widgetConfig.fontFamily !== undefined &&
+      !["system", "inter", "poppins", "roboto", "georgia"].includes(widgetConfig.fontFamily)
+    ) {
+      merged.fontFamily = "system";
+    }
+    if (
+      widgetConfig.launcherStyle !== undefined &&
+      !["icon", "icon-text", "avatar"].includes(widgetConfig.launcherStyle)
+    ) {
+      merged.launcherStyle = "icon";
+    }
+    bot.widgetConfig = merged;
+  }
   if (leadConfig !== undefined) {
     // Enforce "only one identifier at a time" even if the client sends something odd
     const merged = { ...bot.leadConfig, ...leadConfig };
@@ -134,7 +159,7 @@ const setModelConfig = asyncHandler(async (req, res) => {
 // handover is offered at all. Ownership of every agent/team ID is verified
 // against req.user so a bot can't be pointed at someone else's agents.
 const setAgentConfig = asyncHandler(async (req, res) => {
-  const { assignEnabled, assignedAgents, assignedTeams } = req.body;
+  const { assignEnabled, assignedAgents, assignedTeams, handoverMessageThreshold } = req.body;
 
   const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
   if (!bot) throw new ApiError(404, "Bot not found");
@@ -158,6 +183,14 @@ const setAgentConfig = asyncHandler(async (req, res) => {
   }
 
   if (assignEnabled !== undefined) bot.agentConfig.assignEnabled = assignEnabled;
+
+  if (handoverMessageThreshold !== undefined) {
+    const n = Number(handoverMessageThreshold);
+    if (!Number.isFinite(n) || n < 1 || n > 50) {
+      throw new ApiError(400, "handoverMessageThreshold must be a number between 1 and 50");
+    }
+    bot.agentConfig.handoverMessageThreshold = Math.round(n);
+  }
 
   await bot.save();
   res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });

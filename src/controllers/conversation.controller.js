@@ -13,7 +13,7 @@ const ensureOwnedBot = async (botId, userId) => {
 const listConversations = asyncHandler(async (req, res) => {
   const bot = await ensureOwnedBot(req.params.id, req.user._id);
 
-  const page  = Math.max(1, parseInt(req.query.page)  || 1);
+  const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.min(100, parseInt(req.query.limit) || 20);
   const filter = { bot: bot._id };
   if (req.query.type) filter.type = req.query.type;
@@ -28,12 +28,12 @@ const listConversations = asyncHandler(async (req, res) => {
   ]);
 
   const summarized = conversations.map((c) => ({
-    sessionId:     c.sessionId,
-    type:          c.type,
-    visitor:       c.visitor,
-    messageCount:  c.messages.length,
-    lastMessage:   c.messages[c.messages.length - 1]?.content?.slice(0, 120) || "",
-    startedAt:     c.createdAt,
+    sessionId: c.sessionId,
+    type: c.type,
+    visitor: c.visitor,
+    messageCount: c.messages.length,
+    lastMessage: c.messages[c.messages.length - 1]?.content?.slice(0, 120) || "",
+    startedAt: c.createdAt,
     lastActivityAt: c.updatedAt,
   }));
 
@@ -59,11 +59,13 @@ const getConversation = asyncHandler(async (req, res) => {
   res.status(200).json({
     success: true,
     data: {
-      sessionId:   conversation.sessionId,
-      type:        conversation.type,
-      visitor:     conversation.visitor,
-      messages:    conversation.messages,
-      startedAt:   conversation.createdAt,
+      sessionId: conversation.sessionId,
+      type: conversation.type,
+      visitor: conversation.visitor,
+      // messages already carry role, content, via ("ai"|"agent"), agentName, createdAt
+      messages: conversation.messages,
+      handover: conversation.handover,
+      startedAt: conversation.createdAt,
       lastActivityAt: conversation.updatedAt,
     },
   });

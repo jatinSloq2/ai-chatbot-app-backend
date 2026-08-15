@@ -13,6 +13,7 @@ const getWidgetConfig = asyncHandler(async (req, res) => {
       leadConfig: bot.leadConfig,
       agentConfig: bot.agentConfig,
       isActive: bot.isActive,
+      faqs: bot.widgetConfig?.faqs || [],
     },
   });
 });
@@ -51,6 +52,9 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
     height: parseInt(req.query.height) || 520,
     width: parseInt(req.query.width) || 360,
     botName: bot.name,
+    // Up to 5 quick-question bubbles shown on the opening screen. Tapping
+    // one sends its text as the visitor's message.
+    faqs: (savedConfig.faqs || []).slice(0, 5),
     // Pre-chat lead capture form settings (name/email/phone + verification)
     leadConfig: bot.leadConfig || {
       enabled: false,
@@ -60,8 +64,9 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
       identifierRequired: true,
       verifyIdentifier: false,
     },
-    // Human handover — whether the "Talk to a human" option is offered at all.
-    agentConfig: bot.agentConfig || { assignEnabled: false },
+    // Human handover — whether the "Talk to a human" option is offered at
+    // all, and after how many visitor messages it's offered.
+    agentConfig: bot.agentConfig || { assignEnabled: false, handoverMessageThreshold: 10 },
   };
 
   const script = buildWidgetScript({ apiBaseUrl, publicKey, config });
@@ -188,6 +193,19 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
 
     // timestamp
     ".jb-ts{font-size:10px;color:" + colors.textMuted + ";text-align:center;margin:4px 0;}",
+
+    // FAQ / quick-question bubbles (shown on the opening screen)
+    "#jb-faqs{display:flex;flex-wrap:wrap;gap:6px;align-self:flex-start;max-width:100%;",
+    "margin-top:2px;animation:jb-fadein .2s ease;}",
+    ".jb-faq-btn{background:" + colors.botBg + ";border:1px solid " + colors.border + ";",
+    "color:" + CONFIG.primaryColor + ";border-radius:14px;padding:7px 12px;font-size:12.5px;",
+    "cursor:pointer;font-family:inherit;text-align:left;line-height:1.3;transition:border-color .15s,background .15s;}",
+    ".jb-faq-btn:hover{border-color:" + CONFIG.primaryColor + ";background:" + colors.bgMsgs + ";}",
+    ".jb-faq-btn:disabled{opacity:.5;cursor:default;}",
+
+    // handover nudge fade-in for the bar itself
+    "#jb-handover-bar{transition:opacity .2s;}",
+    "#jb-handover-bar.jb-hidden{display:none;}",
 
     // powered by
     "#jb-powered{text-align:center;padding:4px 0 8px;font-size:10px;color:" + colors.textMuted + ";}",
@@ -352,12 +370,33 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   win.appendChild(leadEl);
 
   // ---------- human handover bar ----------
+  // Not shown from the first message — only once the visitor has exchanged
+  // at least CONFIG.agentConfig.handoverMessageThreshold messages, so the AI
+  // gets a fair shot before a human is offered.
   var handoverBarEl = null;
   if (AGENT_CONFIG.assignEnabled) {
     handoverBarEl = document.createElement("div");
     handoverBarEl.id = "jb-handover-bar";
+    handoverBarEl.className = "jb-hidden";
     handoverBarEl.innerHTML = '<button id="jb-handover-btn" type="button">Talk to a human agent</button>';
     win.appendChild(handoverBarEl);
+  }
+  var HANDOVER_THRESHOLD = Math.max(1, parseInt(AGENT_CONFIG.handoverMessageThreshold, 10) || 10);
+  var MSG_COUNT_KEY = "jb_msgcount_" + PK;
+  var NUDGE_SHOWN_KEY = "jb_handover_nudged_" + PK;
+  var userMsgCount = parseInt(storageGet(MSG_COUNT_KEY), 10) || 0;
+
+  function revealHandoverBar() {
+    if (!handoverBarEl || handoverStatus !== "none") return;
+    handoverBarEl.classList.remove("jb-hidden");
+    if (storageGet(NUDGE_SHOWN_KEY) !== "1") {
+      storageSet(NUDGE_SHOWN_KEY, "1");
+      addSystemMessage("Still need help? You can connect with a human agent below.");
+    }
+  }
+
+  function maybeRevealHandoverBar() {
+    if (userMsgCount >= HANDOVER_THRESHOLD) revealHandoverBar();
   }
 
   var msgsEl   = document.getElementById("jb-msgs");
@@ -380,11 +419,45 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   var leadResendBtn = document.getElementById("jb-lead-resend");
   var leadTarget    = null; // { type: "email"|"phone", value: "..." }
 
+  var FAQS = (CONFIG.faqs || []).slice(0, 5);
+
+  function removeFaqBubbles() {
+    var el = document.getElementById("jb-faqs");
+    if (el) el.remove();
+  }
+
+  // Renders up to 5 tappable quick-question bubbles under the welcome
+  // message. Only shown on a fresh conversation (no messages exchanged
+  // yet) — once the visitor sends anything, real or via a bubble tap, they
+  // disappear for good.
+  function showFaqs() {
+    if (!FAQS.length || userMsgCount > 0 || document.getElementById("jb-faqs")) return;
+
+    var wrap = document.createElement("div");
+    wrap.id = "jb-faqs";
+
+    FAQS.forEach(function (q) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "jb-faq-btn";
+      btn.textContent = q;
+      btn.addEventListener("click", function () {
+        if (isStreaming) return;
+        sendMessage(q);
+      });
+      wrap.appendChild(btn);
+    });
+
+    msgsEl.appendChild(wrap);
+    msgsEl.scrollTop = msgsEl.scrollHeight;
+  }
+
   function showWelcome() {
     if (msgsEl.children.length === 0 && CONFIG.welcomeMessage) {
       addTimestamp();
       addMessage("bot", CONFIG.welcomeMessage);
     }
+    showFaqs();
   }
 
   function leadComplete() {
@@ -666,11 +739,19 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
 
     (data.messages || []).forEach(function (m) {
       if (m.role === "user") {
-        if (isInitialLoad) addMessage("user", m.content);
+        if (isInitialLoad) {
+          addMessage("user", m.content);
+          userMsgCount += 1;
+        }
         return;
       }
       addMessage("bot", m.content, m.via === "agent" ? (m.agentName || "Agent") : null);
     });
+
+    if (isInitialLoad) {
+      storageSet(MSG_COUNT_KEY, String(userMsgCount));
+      maybeRevealHandoverBar();
+    }
   }
 
   // Rehydrates a returning visitor's conversation (messages + handover
@@ -702,18 +783,28 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
   }
 
   // ---------- send message ----------
-  function sendMessage() {
-    var text = inputEl.value.trim();
+  // presetText: used by FAQ bubble clicks, which send fixed text instead of
+  // whatever is currently in the input box.
+  function sendMessage(presetText) {
+    var text = typeof presetText === "string" ? presetText.trim() : inputEl.value.trim();
     if (!text || isStreaming) return;
 
-    inputEl.value = "";
-    inputEl.style.height = "auto";
-    sendBtn.classList.remove("active");
+    if (typeof presetText !== "string") {
+      inputEl.value = "";
+      inputEl.style.height = "auto";
+      sendBtn.classList.remove("active");
+    }
+
+    removeFaqBubbles();
 
     addTimestamp();
     addMessage("user", text);
     if (handoverStatus === "none") showTyping();
     isStreaming = true;
+
+    userMsgCount += 1;
+    storageSet(MSG_COUNT_KEY, String(userMsgCount));
+    maybeRevealHandoverBar();
 
     var botEl = null;
 

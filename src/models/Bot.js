@@ -51,6 +51,18 @@ const botSchema = new mongoose.Schema(
       primaryColor: { type: String, default: "#4F46E5" },
       welcomeMessage: { type: String, default: "Hi! How can I help you today?" },
       position: { type: String, enum: ["bottom-right", "bottom-left"], default: "bottom-right" },
+      // Up to 5 quick-question bubbles shown on the widget's opening screen
+      // (alongside the welcome message, before the visitor has sent
+      // anything). Tapping one sends its text as the visitor's first
+      // message, exactly as if they had typed it.
+      faqs: {
+        type: [String],
+        default: [],
+        validate: {
+          validator: (arr) => arr.length <= 5,
+          message: "You can add up to 5 quick questions",
+        },
+      },
     },
 
     // --- Pre-chat lead capture (widget) ---
@@ -79,6 +91,12 @@ const botSchema = new mongoose.Schema(
     assignedTeams: [{ type: mongoose.Schema.Types.ObjectId, ref: "Team" }],
     agentConfig: {
       assignEnabled: { type: Boolean, default: false }, // "agents_assign_enabled"
+      // Number of visitor messages that must be exchanged in a conversation
+      // before the "Talk to a human agent" option is offered in the widget.
+      // Keeps agents from being pulled in on message 1 — the AI gets a fair
+      // shot first. Configurable per bot, shown next to the agent/team
+      // selection in the dashboard.
+      handoverMessageThreshold: { type: Number, default: 10, min: 1, max: 50 },
     },
 
     isActive: { type: Boolean, default: true },
