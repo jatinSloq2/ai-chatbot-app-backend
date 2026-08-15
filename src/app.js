@@ -13,6 +13,8 @@ const widgetController = require("./controllers/widget.controller");
 
 const app = express();
 
+app.set("trust proxy", 1);
+
 app.use(
   helmet({
     crossOriginResourcePolicy: false,
