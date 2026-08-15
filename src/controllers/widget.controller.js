@@ -3,7 +3,7 @@ const ApiError = require("../utils/ApiError");
 const Bot = require("../models/Bot");
 const botService = require("../services/bot.service");
 
-// Custom branding (hiding "Powered by JestBot") is a paid-plan feature.
+// Hiding the "Powered by JestBot" watermark is a paid-plan feature.
 // Re-checked against the owner's LIVE plan here rather than trusting the
 // saved widgetConfig.hideBranding flag alone, so a downgrade takes effect
 // immediately on every bot without needing to touch each one.
@@ -11,7 +11,7 @@ const resolveBrandingHidden = async (bot) => {
   if (!bot.widgetConfig?.hideBranding) return false;
   try {
     const plan = await botService.getActivePlan(bot.user);
-    return !!plan.limits?.customBranding;
+    return !!plan.limits?.hideWatermark;
   } catch {
     return false;
   }
@@ -80,7 +80,7 @@ const serveWidgetScript = asyncHandler(async (req, res) => {
     launcherStyle: savedConfig.launcherStyle || "icon",
     launcherText: savedConfig.launcherText || "Chat with us",
     soundEnabled: savedConfig.soundEnabled !== false,
-    // Custom branding — omit the "Powered by JestBot" footer. Only true
+    // Watermark removal — omit the "Powered by JestBot" footer. Only true
     // when BOTH the owner opted in AND their live plan allows it.
     hideBranding: hideBranding,
     // Pre-chat lead capture form settings (name/email/phone + verification)

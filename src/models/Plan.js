@@ -34,10 +34,10 @@ const planSchema = new mongoose.Schema(
       maxTeams: { type: Number, required: true, default: 0 },
       maxAgentsPerTeam: { type: Number, required: true, default: 0 },
 
-      // --- Monetization: widget custom branding ---
+      // --- Monetization: widget watermark removal ---
       // When true, bots on this plan may hide the "Powered by JestBot"
-      // footer from their embedded widget. Free plan keeps it visible.
-      customBranding: { type: Boolean, default: false },
+      // watermark from their embedded widget. Free plan keeps it visible.
+      hideWatermark: { type: Boolean, default: false },
     },
 
     isActive: { type: Boolean, default: true },

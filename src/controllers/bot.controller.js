@@ -79,15 +79,15 @@ const updateBot = asyncHandler(async (req, res) => {
   if (widgetConfig !== undefined) {
     const merged = { ...(bot.widgetConfig.toObject ? bot.widgetConfig.toObject() : bot.widgetConfig), ...widgetConfig };
     if (widgetConfig.hideBranding === true) {
-      // Custom branding (hiding "Powered by JestBot") is a paid-plan
+      // Hiding the "Powered by JestBot" watermark is a paid-plan
       // feature — re-checked here so a direct API call can't bypass the
       // dashboard's lock, and enforced again at widget-render-time so a
       // later downgrade takes effect immediately without editing the bot.
       const plan = await botService.getActivePlan(req.user._id);
-      if (!plan.limits.customBranding) {
+      if (!plan.limits.hideWatermark) {
         throw new ApiError(
           403,
-          `Custom branding isn't available on your plan (${plan.name}). Upgrade to hide the "Powered by JestBot" footer.`
+          `Hiding the "Powered by JestBot" watermark isn't available on your plan (${plan.name}). Upgrade to enable this.`
         );
       }
     }
