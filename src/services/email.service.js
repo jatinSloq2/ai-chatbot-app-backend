@@ -1,6 +1,22 @@
 const transporter = require("../config/mailer");
+const logger = require("../utils/logger");
+const credentialEmailSender = require("./credentialEmailSender.service");
+const { resolveAdminEmailCredential } = require("./platformEmailSender.service");
 
 const sendEmail = async ({ to, subject, html }) => {
+  const cred = await resolveAdminEmailCredential().catch(() => null);
+
+  if (cred) {
+    try {
+      await credentialEmailSender.sendEmail(cred, { to, subject, html });
+      return;
+    } catch (err) {
+      logger.error(`[Platform email] Send failed via admin credential ${cred._id}, falling back to SMTP: ${err.message}`);
+      await cred.markFailed(err.message).catch(() => {});
+      // fall through to the SMTP transporter below rather than losing the email
+    }
+  }
+
   await transporter.sendMail({
     from: process.env.EMAIL_FROM,
     to,

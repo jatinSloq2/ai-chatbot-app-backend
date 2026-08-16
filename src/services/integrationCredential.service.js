@@ -67,7 +67,6 @@ const updateCredential = async (id, userId, { label, payload, isActive, isDefaul
   }
   if (isDefault !== undefined) cred.isDefault = isDefault;
   if (isDefault !== undefined) await cred.save();
-
   return cred;
 };
 
@@ -89,7 +88,7 @@ function mergeDeep(target, source) {
 
 const deleteCredential = async (id, userId) => {
   const cred = await getOwnedCredential(id, userId);
-  await cred.deleteOne();
+  await cred.deleteOne()
 };
 
 // Resolves which credential to actually use for a given user+channel at
@@ -106,7 +105,7 @@ const setDefault = async (id, userId) => {
   const cred = await getOwnedCredential(id, userId);
   cred.isDefault = true;
   await cred.save();
-  await clearOtherDefaults(userId, cred.channel, cred._id);
+  await clearOtherDefaults(userId, cred.channel, cred._id)
   return cred;
 };
 

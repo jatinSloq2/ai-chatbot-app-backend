@@ -85,8 +85,23 @@ async function refreshAccessToken(provider, refreshToken) {
 
 // Ensures a credential's oauth.accessToken is valid, refreshing (and
 // persisting) it first if it's expired or about to expire. Call this before
-// any send/test that needs a live token. Throws if there's no refresh token
-// or the refresh itself fails (caller should mark the credential 'expired').
+// any send/test that needs a live token.
+//
+// Note on token lifetimes: neither Google nor Microsoft issue long-lived
+// *access* tokens — both are ~1hr regardless of anything we configure. The
+// refresh_token is what makes this durable, and it's what buildAuthUrl()
+// requests (access_type=offline + prompt=consent for Google, offline_access
+// scope for Microsoft). As long as that refresh token stays valid, this
+// keeps working indefinitely with zero user interaction.
+//
+// It stops being valid in a few specific ways — most commonly: the Google
+// Cloud OAuth consent screen is still in "Testing" mode (unverified apps get
+// their refresh tokens force-expired after 7 days, no matter what), the user
+// revoked access from their Google/Microsoft account settings, or (rare) the
+// token simply wasn't used for 6+ months. When that happens the refresh call
+// itself fails — we can't recover from that in code, only surface it clearly
+// so whoever owns this credential knows to reconnect rather than assuming
+// it's a transient send error.
 async function getValidAccessToken(credentialDoc) {
   const oauth = credentialDoc.email?.oauth;
   if (!oauth?.accessToken) throw new Error("No access token stored for this account");
@@ -95,17 +110,47 @@ async function getValidAccessToken(credentialDoc) {
   if (!expiresSoon) return oauth.accessToken;
 
   if (!oauth.refreshToken) {
+    await markExpired(credentialDoc, "No refresh token stored — please reconnect this account");
     throw new Error("Access token expired and no refresh token is stored — please reconnect this account");
   }
 
-  const tokenData = await refreshAccessToken(oauth.provider, oauth.refreshToken);
+  let tokenData;
+  try {
+    tokenData = await refreshAccessToken(oauth.provider, oauth.refreshToken);
+  } catch (err) {
+    // Google's classic signal for "this refresh token is dead" is a 400
+    // with error: 'invalid_grant' — covers revoked access, a testing-mode
+    // 7-day expiry, and the 6-months-unused case. Microsoft returns
+    // invalid_grant too, for the equivalent situations. Anything else
+    // (network blip, provider outage) is left as a normal thrown error so
+    // it doesn't get mistaken for "needs reconnect" and isn't silently
+    // marked expired for a problem that will resolve itself on retry.
+    const code = err?.response?.data?.error;
+    if (code === "invalid_grant") {
+      await markExpired(credentialDoc, "This account's access was revoked or expired — please reconnect it");
+      throw new Error("This account's access was revoked or expired — please reconnect it from the Credentials page");
+    }
+    throw err;
+  }
 
   credentialDoc.email.oauth.accessToken = tokenData.access_token;
   if (tokenData.refresh_token) credentialDoc.email.oauth.refreshToken = tokenData.refresh_token;
   credentialDoc.email.oauth.tokenExpiry = new Date(Date.now() + (tokenData.expires_in || 3600) * 1000);
+  credentialDoc.status = "connected";
+  credentialDoc.lastError = undefined;
   await credentialDoc.save();
 
   return tokenData.access_token;
+}
+
+// Marks the credential 'expired' (distinct from the generic 'failed' status
+// a one-off send error gets) so the dashboard can specifically prompt
+// "reconnect this account" instead of implying a retry might just work.
+async function markExpired(credentialDoc, message) {
+  credentialDoc.status = "expired";
+  credentialDoc.lastError = message;
+  credentialDoc.lastCheckedAt = new Date();
+  await credentialDoc.save().catch(() => { });
 }
 
 // Step 4: after a successful callback, save (or update) the credential.
