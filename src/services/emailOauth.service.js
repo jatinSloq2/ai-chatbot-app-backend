@@ -30,15 +30,9 @@ function buildAuthUrl(provider, userId) {
     response_type: "code",
     scope: cfg.scope,
     state: signState(userId),
-    access_type: "offline", // Google: ask for a refresh_token
-    prompt: "consent", // Google: force the consent screen so we actually get one back
+    access_type: "offline", // ask Google for a refresh_token
+    prompt: "consent", // force the consent screen so we actually get one back
   });
-  // Microsoft ignores access_type/prompt=consent the way Google needs them;
-  // offline_access is already in the scope list, which is what MS requires.
-  if (provider === "microsoft") {
-    params.delete("access_type");
-    params.set("prompt", "select_account");
-  }
   return `${cfg.authUrl}?${params.toString()}`;
 }
 
@@ -67,7 +61,7 @@ async function fetchProfileEmail(provider, accessToken) {
     headers: { Authorization: `Bearer ${accessToken}` },
     timeout: 10000,
   });
-  return provider === "google" ? data.email : data.mail || data.userPrincipalName;
+  return data.email;
 }
 
 // Refreshes an access token using the stored refresh token. Returns the new
@@ -155,7 +149,7 @@ async function upsertOauthCredential({ userId, provider, tokenData, email }) {
   return IntegrationCredential.create({
     user: userId,
     channel: "email",
-    label: `${provider === "google" ? "Gmail" : "Outlook"} · ${email}`,
+    label: `Gmail · ${email}`,
     isDefault: existingCount === 0, // first email credential becomes default automatically
     status: "connected",
     lastCheckedAt: new Date(),

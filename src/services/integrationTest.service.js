@@ -53,13 +53,6 @@ async function testEmailOauth(cred) {
     });
     return;
   }
-  if (oauth.provider === "microsoft") {
-    await axios.get("https://graph.microsoft.com/v1.0/me", {
-      headers: { Authorization: `Bearer ${accessToken}` },
-      timeout: 10000,
-    });
-    return;
-  }
   throw new Error("Unsupported OAuth provider");
 }
 

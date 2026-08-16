@@ -10,16 +10,9 @@ const initGoogle = asyncHandler(async (req, res) => {
   res.redirect(url);
 });
 
-// GET /api/oauth/microsoft/init  (protected — needs a logged-in user)
-const initMicrosoft = asyncHandler(async (req, res) => {
-  const url = oauthService.buildAuthUrl("microsoft", String(req.user._id));
-  res.redirect(url);
-});
-
-// Shared callback handler for both providers — Google/Microsoft land the
-// user's browser here directly (not an API/XHR call), so on any failure we
-// redirect back into the dashboard with an error message instead of
-// returning raw JSON the user would never see.
+// Callback handler — Google lands the user's browser here directly (not an
+// API/XHR call), so on any failure we redirect back into the dashboard with
+// an error message instead of returning raw JSON the user would never see.
 const handleCallback = (provider) =>
   asyncHandler(async (req, res) => {
     const { code, error, state } = req.query;
@@ -51,6 +44,5 @@ const handleCallback = (provider) =>
   });
 
 const callbackGoogle = handleCallback("google");
-const callbackMicrosoft = handleCallback("microsoft");
 
-module.exports = { initGoogle, initMicrosoft, callbackGoogle, callbackMicrosoft };
+module.exports = { initGoogle, callbackGoogle };
