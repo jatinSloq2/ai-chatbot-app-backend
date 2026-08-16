@@ -124,19 +124,9 @@ const createEmailApi = asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data: { credential: sanitizeCredential(cred) } });
 });
 
-// POST /api/credentials/email/oauth  (manual token paste — see routes file note)
-const createEmailOauth = asyncHandler(async (req, res) => {
-  const { label, isDefault, fromEmail, fromName, ...oauth } = req.body;
-  if (!oauth.provider || !oauth.accessToken) throw new ApiError(400, "provider and accessToken are required");
-  const cred = await credentialService.createCredential({
-    userId: req.user._id,
-    channel: "email",
-    label,
-    isDefault,
-    payload: { method: "oauth", fromEmail, fromName, oauth },
-  });
-  res.status(201).json({ success: true, data: { credential: sanitizeCredential(cred) } });
-});
+// Note: there is no manual "paste a token" creator for email OAuth anymore.
+// That credential type is only ever created by completing the real
+// consent-screen flow — see controllers/oauth.controller.js.
 
 // POST /api/credentials/whatsapp
 const createWhatsapp = createFor("whatsapp", [
@@ -213,7 +203,6 @@ module.exports = {
   getCredential,
   createEmailSmtp,
   createEmailApi,
-  createEmailOauth,
   createWhatsapp,
   createSms,
   createAiProvider,

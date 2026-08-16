@@ -15,6 +15,7 @@ const agentAuthRoutes = require("./agentAuth.routes");
 const leadsRoutes = require("./leads.routes");
 const cannedResponseRoutes = require("./cannedResponse.routes");
 const integrationCredentialRoutes = require("./integrationCredential.routes");
+const oauthRoutes = require("./oauth.routes");
 
 router.use("/auth", authRoutes);
 router.use("/bots", botRoutes);
@@ -29,6 +30,7 @@ router.use("/agent-auth", agentAuthRoutes); // agent-facing login + panel APIs
 router.use("/leads", leadsRoutes); // owner-side lead aggregation across bots
 router.use("/canned-responses", cannedResponseRoutes); // owner-side saved-reply (macro) management
 router.use("/credentials", integrationCredentialRoutes); // owner-side integration credentials (email/whatsapp/sms/ai)
+router.use("/oauth", oauthRoutes); // Google/Microsoft "Connect Gmail / Connect Outlook" real OAuth2 flow
 router.use("/v1", publicRoutes); // public developer-facing API (secret/public key auth, not user JWT)
 
 module.exports = router;

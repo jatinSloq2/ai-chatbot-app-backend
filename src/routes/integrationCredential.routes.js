@@ -11,12 +11,11 @@ router.get("/:id", credentialController.getCredential);
 
 router.post("/email/smtp", credentialController.createEmailSmtp);
 router.post("/email/api", credentialController.createEmailApi);
-// Manual OAuth token entry (paste an access/refresh token you already
-// obtained from Google/Microsoft). A full "Connect Gmail" consent-screen
-// flow needs GOOGLE_CLIENT_ID/SECRET + MS_CLIENT_ID/SECRET registered at
-// the platform level (see integrations spec, section 1.1) — wire
-// GET /api/oauth/google/init + callback the same way once those are set up.
-router.post("/email/oauth", credentialController.createEmailOauth);
+// Real OAuth2 connect flow lives in routes/oauth.routes.js:
+//   GET /api/oauth/google/init | /api/oauth/microsoft/init      (redirect to consent screen)
+//   GET /api/oauth/google/callback | /api/oauth/microsoft/callback (creates/updates the credential)
+// There is no manual "paste a token" POST route anymore — an OAuth email
+// credential can only be created by completing that real flow.
 
 router.post("/whatsapp", credentialController.createWhatsapp);
 router.post("/sms", credentialController.createSms);

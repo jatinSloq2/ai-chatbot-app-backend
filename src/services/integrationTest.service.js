@@ -1,6 +1,7 @@
 const axios = require("axios");
 const nodemailer = require("nodemailer");
 const { signGetRequest } = require("../utils/awsSigV4");
+const { getValidAccessToken } = require("./emailOauth.service");
 
 // Every tester resolves { ok: true } or throws an Error with a human-readable
 // message (caught by the caller and stored as lastError).
@@ -35,18 +36,26 @@ async function testEmailSmtp(smtp) {
   await transporter.verify();
 }
 
-async function testEmailOauth(oauth) {
-  if (!oauth?.accessToken) throw new Error("No access token stored for this account");
+// Takes the full credential document (not just the oauth sub-object) so it
+// can transparently refresh + persist an expired access token before
+// testing it — this is the "real" refresh path a manually-pasted token
+// never had.
+async function testEmailOauth(cred) {
+  const oauth = cred.email?.oauth;
+  if (!oauth?.accessToken) throw new Error("No access token stored for this account — connect the account first");
+
+  const accessToken = await getValidAccessToken(cred);
+
   if (oauth.provider === "google") {
     await axios.get("https://www.googleapis.com/oauth2/v3/userinfo", {
-      headers: { Authorization: `Bearer ${oauth.accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 10000,
     });
     return;
   }
   if (oauth.provider === "microsoft") {
     await axios.get("https://graph.microsoft.com/v1.0/me", {
-      headers: { Authorization: `Bearer ${oauth.accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
       timeout: 10000,
     });
     return;
@@ -97,9 +106,9 @@ async function testEmailApi(apiCfg) {
 }
 
 async function testEmail(cred) {
-  const { method, smtp, oauth, api } = cred.email || {};
+  const { method, smtp, api } = cred.email || {};
   if (method === "smtp") return testEmailSmtp(smtp);
-  if (method === "oauth") return testEmailOauth(oauth);
+  if (method === "oauth") return testEmailOauth(cred);
   if (method === "api") return testEmailApi(api);
   throw new Error("Unknown email method");
 }
