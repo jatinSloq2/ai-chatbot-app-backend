@@ -4,7 +4,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
-const { MEDIA_ROOT, PUBLIC_PREFIX } = require("./services/storage.service");
+const { MEDIA_ROOT, PUBLIC_PREFIX, STATIC_ASSETS_DIR, STATIC_PREFIX } = require("./services/storage.service");
 
 const routes = require("./routes");
 const { notFound, errorHandler } = require("./middlewares/error.middleware");
@@ -99,6 +99,17 @@ app.use(
     next();
   },
   express.static(MEDIA_ROOT)
+);
+
+app.use(
+  STATIC_PREFIX,
+  (req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    next();
+  },
+  express.static(STATIC_ASSETS_DIR)
 );
 
 app.use("/api", routes);

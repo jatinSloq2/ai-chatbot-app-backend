@@ -6,6 +6,8 @@ const crypto = require("crypto");
 // deployments that mount a persistent volume somewhere other than the repo
 // root (e.g. a Docker volume, an EFS mount, etc).
 const MEDIA_ROOT = process.env.MEDIA_STORAGE_DIR || path.join(process.cwd(), "uploads");
+const STATIC_ASSETS_DIR = path.join(process.cwd(), "assets");
+const STATIC_PREFIX = "/assets";
 
 // Base URL prefix the stored files are served from (see app.js's
 // express.static("/uploads", ...) mount). Kept separate from MEDIA_ROOT so
@@ -80,4 +82,4 @@ const saveMedia = async ({ ownerId, botId, actorType, actorId, file }) => {
   };
 };
 
-module.exports = { saveMedia, MEDIA_ROOT, PUBLIC_PREFIX };
+module.exports = { saveMedia, MEDIA_ROOT, PUBLIC_PREFIX, STATIC_ASSETS_DIR, STATIC_PREFIX };
