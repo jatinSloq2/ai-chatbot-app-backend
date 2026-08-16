@@ -112,6 +112,7 @@ app.use(
   express.static(STATIC_ASSETS_DIR)
 );
 
+app.get("/favicon.ico", (req, res) => res.redirect(301, "/assets/favicon.ico"));
 app.use("/api", routes);
 
 app.use(notFound);
