@@ -14,7 +14,7 @@ const planSchema = new mongoose.Schema(
     },
     interval: {
       type: String,
-      enum: ["month", "year"],
+      enum: ["month", "quarter", "year"],
       default: "month",
     },
 
@@ -26,7 +26,7 @@ const planSchema = new mongoose.Schema(
       allowUserOwnApiKey: { type: Boolean, default: true }, // BYOK always allowed even on free
       allowedProviders: {
         type: [String],
-        default: [], // paid plans can add "openai", "anthropic" as platform-provided
+        default: ["ollama"], // paid plans can add "openai", "anthropic" as platform-provided
       },
 
       // --- Agent System limits ---

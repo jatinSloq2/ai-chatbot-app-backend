@@ -96,6 +96,23 @@ const setBotApiKey = async (botId, userId, { type, provider, model, apiKey, conf
 
   const encryptedApiKey = apiKey ? encrypt(apiKey) : null;
 
+  // Providers that need no user-supplied key (currently just Ollama, which
+  // runs on our own infrastructure) are gated by the plan's
+  // `allowedProviders` list — that compute cost is ours to carry, so it's
+  // not something the Free plan gets by default anymore. Any provider that
+  // DOES require a key can still be used on any plan via BYOK
+  // (allowUserOwnApiKey is true even on Free) — the check below only ever
+  // applies to the no-key-required case.
+  if (type === "llm" && !requiresApiKey("llm", provider)) {
+    const plan = await getActivePlan(userId);
+    if (!plan.limits.allowedProviders.includes(provider)) {
+      throw new ApiError(
+        403,
+        `"${provider}" isn't available on your current plan. Upgrade your plan, or bring your own API key for a provider like OpenAI or Anthropic instead.`
+      );
+    }
+  }
+
   if (type === "llm") {
     if (!isValidLlmChoice(provider, model || "")) {
       // model omitted is fine (falls back to bot's current/default model) —
@@ -113,6 +130,16 @@ const setBotApiKey = async (botId, userId, { type, provider, model, apiKey, conf
   }
 
   if (type === "embedding") {
+    if (!requiresApiKey("embedding", provider)) {
+      const plan = await getActivePlan(userId);
+      if (!plan.limits.allowedProviders.includes(provider)) {
+        throw new ApiError(
+          403,
+          `"${provider}" isn't available on your current plan. Upgrade your plan, or bring your own API key for a provider like OpenAI instead.`
+        );
+      }
+    }
+
     const finalModel = model || bot.embeddingConfig.model;
     const newDim = getExpectedDimension(provider, finalModel);
 

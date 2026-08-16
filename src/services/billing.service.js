@@ -1,7 +1,7 @@
 const Subscription = require("../models/Subscription");
 
 // Same day-count approximation used consistently everywhere in billing math
-const CYCLE_DAYS = { month: 30, year: 365 };
+const CYCLE_DAYS = { month: 30, quarter: 90, year: 365 };
 
 const daysBetween = (a, b) => Math.max(0, (b.getTime() - a.getTime()) / (1000 * 60 * 60 * 24));
 

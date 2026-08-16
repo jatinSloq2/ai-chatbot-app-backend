@@ -9,6 +9,7 @@ const billingService = require("../services/billing.service");
 const addInterval = (date, interval) => {
   const d = new Date(date);
   if (interval === "year") d.setFullYear(d.getFullYear() + 1);
+  else if (interval === "quarter") d.setMonth(d.getMonth() + 3);
   else d.setMonth(d.getMonth() + 1);
   return d;
 };
