@@ -138,7 +138,8 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
 (function () {
   "use strict";
 
-  if (document.getElementById("jb-root")) return; // prevent double-init
+  // if (document.getElementById("jb-root")) return; // prevent double-init
+  if (document.getElementById("jb-bubble")) return;
 
   var CONFIG   = ${cfg};
   var API_BASE = ${api};
@@ -247,6 +248,7 @@ const buildWidgetScript = ({ apiBaseUrl, publicKey, config }) => {
 
   // ---------- inject styles ----------
   var style = document.createElement("style");
+  style.id = "jb-style";
   style.textContent = [
     // bubble
     "#jb-bubble{position:fixed;" + pos + "bottom:24px;width:56px;height:56px;border-radius:50%;",
