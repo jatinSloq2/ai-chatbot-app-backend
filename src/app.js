@@ -4,6 +4,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const cookieParser = require("cookie-parser");
 const rateLimit = require("express-rate-limit");
+const whatsappController = require("./controllers/whatsapp.controller")
 const { MEDIA_ROOT, PUBLIC_PREFIX, STATIC_ASSETS_DIR, STATIC_PREFIX } = require("./services/storage.service");
 
 const routes = require("./routes");
@@ -31,7 +32,7 @@ app.use((req, res, next) => {
   const isWidgetRoute =
     req.path === "/widget.js" ||
     req.path.startsWith("/api/v1/chat") ||
-    req.path.startsWith("/api/v1/widget") || 
+    req.path.startsWith("/api/v1/widget") ||
     req.path.startsWith("/api/v1/lead");
 
   if (isWidgetRoute) {
@@ -63,6 +64,19 @@ app.post(
   "/api/payments/webhook",
   express.raw({ type: "application/json" }),
   paymentController.webhook
+);
+
+// --- WhatsApp Cloud API webhook ---
+// GET: Meta's one-time verification handshake (query params only, no body).
+// POST: actual message/status events — needs the RAW body for HMAC
+// signature verification, same reasoning as the Razorpay webhook above, so
+// this is mounted here too, before the global express.json() below strips
+// that away.
+app.get("/api/whatsapp/webhook", whatsappController.verifyWebhook);
+app.post(
+  "/api/whatsapp/webhook",
+  express.raw({ type: "application/json" }),
+  whatsappController.receiveWebhook
 );
 
 app.use(express.json());
