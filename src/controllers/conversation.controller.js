@@ -23,7 +23,7 @@ const listConversations = asyncHandler(async (req, res) => {
       .sort({ updatedAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
-      .select("sessionId type visitor messages createdAt updatedAt"),
+      .select("sessionId type visitor messages handover createdAt updatedAt"),
     Conversation.countDocuments(filter),
   ]);
 
@@ -33,6 +33,10 @@ const listConversations = asyncHandler(async (req, res) => {
     visitor: c.visitor,
     messageCount: c.messages.length,
     lastMessage: c.messages[c.messages.length - 1]?.content?.slice(0, 120) || "",
+    handoverStatus: c.handover.status,
+    // Set only once the visitor has actually rated the chat — null while
+    // "requested"/"assigned"/unresolved, or resolved-but-not-yet-rated.
+    csat: c.handover.csat?.rating ? c.handover.csat : null,
     startedAt: c.createdAt,
     lastActivityAt: c.updatedAt,
   }));

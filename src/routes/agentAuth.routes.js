@@ -44,6 +44,10 @@ router.post(
   agentAuthController.sendCannedResponse
 );
 
+// This agent's own CSAT rating history — visible indefinitely, independent
+// of the pending/assigned lists which only show currently-active work.
+router.get("/csat", agentAuthController.listMyRatings);
+
 router.get("/stream", agentAuthController.stream);
 
 module.exports = router;

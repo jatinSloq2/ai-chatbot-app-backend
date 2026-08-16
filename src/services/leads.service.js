@@ -16,7 +16,7 @@ const listLeads = async (ownerId, { page = 1, limit = 20 } = {}) => {
     bot: { $in: botIds },
     $or: [{ "visitor.email": { $ne: null } }, { "visitor.phone": { $ne: null } }],
   })
-    .select("bot sessionId visitor messages createdAt updatedAt")
+    .select("bot sessionId visitor messages handover createdAt updatedAt")
     .sort({ updatedAt: -1 })
     .lean();
 
@@ -38,6 +38,10 @@ const listLeads = async (ownerId, { page = 1, limit = 20 } = {}) => {
       conversationCount: 0,
       lastActivityAt: c.updatedAt,
       firstSeenAt: c.createdAt,
+      // Rating from this lead's most recent rated conversation — since
+      // conversations here are processed newest-first, the first rated one
+      // we hit for a given lead IS the latest one.
+      latestCsatRating: null,
     };
 
     // Conversations are sorted newest-first, so the first time we see this
@@ -49,6 +53,9 @@ const listLeads = async (ownerId, { page = 1, limit = 20 } = {}) => {
     entry.emailVerified = entry.emailVerified || c.visitor.emailVerified;
     entry.phoneVerified = entry.phoneVerified || c.visitor.phoneVerified;
     if (c.createdAt < entry.firstSeenAt) entry.firstSeenAt = c.createdAt;
+    if (entry.latestCsatRating === null && c.handover?.csat?.rating) {
+      entry.latestCsatRating = c.handover.csat.rating;
+    }
 
     const botEntry = entry.bots.get(botId) || {
       botId,
@@ -84,7 +91,7 @@ const getLeadConversations = async (ownerId, identifier) => {
     bot: { $in: botIds },
     $or: [{ "visitor.email": identifier }, { "visitor.phone": identifier }],
   })
-    .select("bot sessionId visitor messages createdAt updatedAt")
+    .select("bot sessionId visitor messages handover createdAt updatedAt")
     .sort({ updatedAt: -1 })
     .lean();
 
@@ -94,6 +101,8 @@ const getLeadConversations = async (ownerId, identifier) => {
     sessionId: c.sessionId,
     messageCount: c.messages.length,
     lastMessage: c.messages[c.messages.length - 1]?.content?.slice(0, 120) || "",
+    handoverStatus: c.handover?.status || "none",
+    csat: c.handover?.csat?.rating ? c.handover.csat : null,
     startedAt: c.createdAt,
     lastActivityAt: c.updatedAt,
   }));

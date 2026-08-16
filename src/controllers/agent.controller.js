@@ -3,6 +3,9 @@ const ApiError = require("../utils/ApiError");
 const agentService = require("../services/agent.service");
 const { getActivePlan } = require("../services/bot.service");
 
+const csatAverage = (performance) =>
+  performance?.csatCount ? Math.round((performance.csatSum / performance.csatCount) * 10) / 10 : null;
+
 const sanitizeAgent = (agent) => ({
   id: agent._id,
   name: agent.name,
@@ -13,6 +16,7 @@ const sanitizeAgent = (agent) => ({
   bots: agent.bots,
   lastSeenAt: agent.lastSeenAt,
   performance: agent.performance,
+  csatAverage: csatAverage(agent.performance),
   createdAt: agent.createdAt,
 });
 

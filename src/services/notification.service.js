@@ -24,6 +24,15 @@ const removeFcmToken = async (agentId, token) => {
 // succeeds (so the in-app notification list is always the source of truth).
 // `type` is a free-form event key (e.g. "test", "handover_request" in later
 // phases); `data` is an optional deep-link payload.
+//
+// IMPORTANT: this is sent as a DATA-ONLY message (no top-level `notification`
+// field) on purpose. When an FCM web push includes a `notification` block,
+// the browser displays it automatically the moment the tab isn't focused —
+// and separately, our own service worker's onBackgroundMessage handler
+// *also* calls showNotification() for that same message. Together that's
+// two system notifications for one push. Sending data-only puts display
+// entirely in our own hands (see firebase-messaging-sw.js), so it only ever
+// renders once.
 const notifyAgent = async ({ agentId, type, title, body, data = {} }) => {
   const record = await AgentNotification.create({ agent: agentId, type, title, body, data });
 
@@ -37,8 +46,13 @@ const notifyAgent = async ({ agentId, type, title, body, data = {} }) => {
       );
       const response = await admin.messaging().sendEachForMulticast({
         tokens,
-        notification: { title, body },
-        data: stringData,
+        // Deliberately NOT using the `notification` field — see comment above.
+        data: { title: title || "", body: body || "", type: type || "", ...stringData },
+        webpush: {
+          // Wakes the service worker promptly even when Chrome would
+          // otherwise coalesce/delay a data-only push as low priority.
+          headers: { Urgency: "high" },
+        },
       });
 
       // Drop any tokens Firebase reports as dead (uninstalled app, expired

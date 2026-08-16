@@ -46,6 +46,12 @@ const agentSchema = new mongoose.Schema(
       missedCount: { type: Number, default: 0 },
       reassignedCount: { type: Number, default: 0 },
       points: { type: Number, default: 0 },
+      // CSAT — kept as a running sum/count rather than an average so it's
+      // updated with a single atomic $inc on each new rating (see
+      // handover.service.js#submitCsat). Average = csatSum / csatCount,
+      // computed wherever it's displayed.
+      csatSum: { type: Number, default: 0 },
+      csatCount: { type: Number, default: 0 },
     },
   },
   { timestamps: true }

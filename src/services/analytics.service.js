@@ -1,5 +1,6 @@
 const MessageEvent = require("../models/MessageEvent");
 const WidgetSession = require("../models/WidgetSession");
+const Conversation = require("../models/Conversation");
 const crypto = require("crypto");
 
 // ----------------------------------------------------------------
@@ -107,6 +108,7 @@ const getBotAnalytics = async (botId, days = 30) => {
     messagesPerDay,
     topDomains,
     hourlyDistribution,
+    csatBuckets,
   ] = await Promise.all([
     // Total widget messages
     MessageEvent.countDocuments({ bot: botId, type: "widget", createdAt: { $gte: since } }),
@@ -167,6 +169,19 @@ const getBotAnalytics = async (botId, days = 30) => {
       }},
       { $sort: { _id: 1 } },
     ]),
+
+    // CSAT — average rating + 1-5 star distribution across every rated
+    // conversation for this bot in the window. Deliberately keyed off
+    // handover.csat.ratedAt (when the visitor actually rated it), not the
+    // conversation's createdAt, so "last 30 days" reflects recent feedback
+    // even for a long-running conversation.
+    Conversation.aggregate([
+      { $match: { bot: botId, "handover.csat.rating": { $ne: null }, "handover.csat.ratedAt": { $gte: since } } },
+      { $group: {
+        _id: "$handover.csat.rating",
+        count: { $sum: 1 },
+      }},
+    ]),
   ]);
 
   // Shape messagesPerDay into a clean array
@@ -180,6 +195,15 @@ const getBotAnalytics = async (botId, days = 30) => {
 
   const successData = successRate[0] || { total: 0, successful: 0 };
   const avgMs = avgResponseTime[0]?.avgMs || null;
+
+  const csatDistribution = [1, 2, 3, 4, 5].map((star) => ({
+    rating: star,
+    count: csatBuckets.find((b) => b._id === star)?.count || 0,
+  }));
+  const csatCount = csatDistribution.reduce((sum, b) => sum + b.count, 0);
+  const csatAverage = csatCount
+    ? Math.round((csatDistribution.reduce((sum, b) => sum + b.rating * b.count, 0) / csatCount) * 10) / 10
+    : null;
 
   return {
     rangeDays: days,
@@ -201,6 +225,12 @@ const getBotAnalytics = async (botId, days = 30) => {
         ? Math.round((successData.successful / successData.total) * 100)
         : null,
       avgResponseMs: avgMs ? Math.round(avgMs) : null,
+    },
+    // Human-handover satisfaction — how visitors rated resolved agent chats.
+    csat: {
+      average: csatAverage,
+      count: csatCount,
+      distribution: csatDistribution,
     },
     charts: {
       messagesPerDay: dailyChart,

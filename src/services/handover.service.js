@@ -186,6 +186,13 @@ const submitCsat = async (bot, sessionId, rating, comment) => {
     await conversation.save();
 
     if (conversation.handover.assignedAgent) {
+        // Running sum/count on the agent — this is what powers the "CSAT"
+        // column in the owner's Agents page and the agent's own ratings view,
+        // without having to re-aggregate every conversation on every read.
+        await Agent.updateOne(
+            { _id: conversation.handover.assignedAgent },
+            { $inc: { "performance.csatSum": rating, "performance.csatCount": 1 } }
+        );
         realtimeService.publish(`agent-assigned:${conversation.handover.assignedAgent}`, "update", { scope: "assigned" });
     }
 
@@ -253,6 +260,19 @@ const getMyConversation = async (agentId, conversationId) => {
     return conversation;
 };
 
+// Every conversation this agent has been rated on, most recent first.
+// Deliberately NOT filtered by handover.status — a rated conversation stays
+// visible to the agent here forever, independent of whatever the pending/
+// assigned lists show (which only ever show "currently active" work).
+const listRatedForAgent = async (agentId, { limit = 50, skip = 0 } = {}) => {
+    return Conversation.find({ "handover.assignedAgent": agentId, "handover.csat.rating": { $ne: null } })
+        .sort({ "handover.csat.ratedAt": -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate("bot", "name")
+        .select("bot sessionId visitor handover createdAt updatedAt");
+};
+
 // options: { media, richContent, cannedResponseId } — all optional. A
 // message needs at least one of `message` (text) or `media`.
 const sendAgentMessage = async (agent, conversationId, message, options = {}) => {
@@ -279,7 +299,7 @@ const sendAgentMessage = async (agent, conversationId, message, options = {}) =>
     await conversation.save();
 
     if (cannedResponseId) {
-        CannedResponse.updateOne({ _id: cannedResponseId }, { $inc: { usageCount: 1 } }).catch(() => { });
+        CannedResponse.updateOne({ _id: cannedResponseId }, { $inc: { usageCount: 1 } }).catch(() => {});
     }
 
     realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
@@ -315,6 +335,7 @@ module.exports = {
     listAssignedToAgent,
     acceptHandover,
     getMyConversation,
+    listRatedForAgent,
     sendAgentMessage,
     resolveHandover,
 };

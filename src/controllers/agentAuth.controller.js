@@ -30,6 +30,9 @@ const setAgentCookies = (res, accessToken, refreshToken) => {
   res.cookie("agentRefreshToken", refreshToken, { ...cookieOptions, maxAge: 30 * 24 * 60 * 60 * 1000 });
 };
 
+const csatAverage = (performance) =>
+  performance?.csatCount ? Math.round((performance.csatSum / performance.csatCount) * 10) / 10 : null;
+
 const sanitizeAgent = (agent) => ({
   id: agent._id,
   name: agent.name,
@@ -39,6 +42,7 @@ const sanitizeAgent = (agent) => ({
   bots: agent.bots,
   lastSeenAt: agent.lastSeenAt,
   performance: agent.performance,
+  csatAverage: csatAverage(agent.performance),
 });
 
 const sanitizeNotification = (n) => ({
@@ -204,6 +208,36 @@ const sanitizeCanned = (c) => ({
   richContent: c.richContent,
 });
 
+const sanitizeRatedConversation = (c) => ({
+  id: c._id,
+  botId: c.bot?._id || c.bot,
+  botName: c.bot?.name || null,
+  sessionId: c.sessionId,
+  visitor: c.visitor,
+  csat: c.handover.csat,
+  resolvedAt: c.handover.resolvedAt,
+  createdAt: c.createdAt,
+});
+
+// GET /api/agent-auth/csat  — this agent's own rating history, independent
+// of whether the underlying conversation is still "active" anywhere else.
+// Answers "how am I doing" even long after every one of these chats ended.
+const listMyRatings = asyncHandler(async (req, res) => {
+  const limit = Math.min(Number(req.query.limit) || 50, 100);
+  const skip = Number(req.query.skip) || 0;
+
+  const conversations = await handoverService.listRatedForAgent(req.agent._id, { limit, skip });
+
+  res.status(200).json({
+    success: true,
+    data: {
+      average: csatAverage(req.agent.performance),
+      count: req.agent.performance?.csatCount || 0,
+      ratings: conversations.map(sanitizeRatedConversation),
+    },
+  });
+});
+
 // GET /api/agent-auth/handovers/pending — the pool of unclaimed chats this
 // agent is eligible to accept.
 const listPendingHandovers = asyncHandler(async (req, res) => {
@@ -351,6 +385,7 @@ module.exports = {
   sendAgentMedia,
   listCannedResponses,
   sendCannedResponse,
+  listMyRatings,
   resolveConversation,
   stream,
 };
