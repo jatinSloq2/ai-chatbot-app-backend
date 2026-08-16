@@ -92,6 +92,16 @@ const deleteCredential = async (id, userId) => {
   await cred.deleteOne();
 };
 
+// Resolves which credential to actually use for a given user+channel at
+// send time: the explicit default if it's active, otherwise the most
+// recently created active credential on that channel, otherwise null (caller
+// falls back to platform defaults / logs, depending on channel).
+const getDefaultCredential = async (userId, channel) => {
+  const preferred = await IntegrationCredential.findOne({ user: userId, channel, isDefault: true, isActive: true });
+  if (preferred) return preferred;
+  return IntegrationCredential.findOne({ user: userId, channel, isActive: true }).sort({ createdAt: -1 });
+};
+
 const setDefault = async (id, userId) => {
   const cred = await getOwnedCredential(id, userId);
   cred.isDefault = true;
@@ -127,6 +137,7 @@ module.exports = {
   createCredential,
   updateCredential,
   deleteCredential,
+  getDefaultCredential,
   setDefault,
   testConnection,
 };

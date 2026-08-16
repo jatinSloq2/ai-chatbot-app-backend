@@ -28,6 +28,10 @@ const botSchema = new mongoose.Schema(
       model: { type: String, default: "llama3.1" },
       // Encrypted user-provided key (BYOK). Null = use platform default (Ollama, free)
       encryptedApiKey: { type: String, default: null },
+      // If this key was copied from a saved Integration Credential (AI Provider
+      // channel) rather than pasted directly, this points back to it so the
+      // dashboard can show "using saved credential X" and re-sync on change.
+      credentialId: { type: mongoose.Schema.Types.ObjectId, ref: "IntegrationCredential", default: null },
       temperature: { type: Number, default: 0.7 },
     },
 
@@ -39,6 +43,7 @@ const botSchema = new mongoose.Schema(
       },
       model: { type: String, default: "nomic-embed-text" },
       encryptedApiKey: { type: String, default: null },
+      credentialId: { type: mongoose.Schema.Types.ObjectId, ref: "IntegrationCredential", default: null },
       // Tracks the exact model+dimension used for THIS bot's currently stored
       // chunks. If a user changes provider/model, we compare against this to
       // detect a mismatch before it silently breaks retrieval.
@@ -122,6 +127,14 @@ const botSchema = new mongoose.Schema(
       // If true, the visitor must enter an OTP (sent by email or SMS,
       // matching identifierType) before the chat unlocks.
       verifyIdentifier: { type: Boolean, default: false },
+
+      // Message body used when sending the OTP. Supports {name} and {otp}
+      // placeholders (also {botName}), filled in at send time. Used as the
+      // SMS body verbatim, and as the message line inside the email template.
+      otpMessageTemplate: {
+        type: String,
+        default: "Hi {name}, your {botName} verification code is {otp}. It expires in 10 minutes.",
+      },
     },
 
     // --- Human agent handover (Agent System) ---

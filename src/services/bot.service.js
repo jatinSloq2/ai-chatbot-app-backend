@@ -2,6 +2,7 @@ const Bot = require("../models/Bot");
 const Plan = require("../models/Plan");
 const Subscription = require("../models/Subscription");
 const User = require("../models/User");
+const IntegrationCredential = require("../models/IntegrationCredential");
 const ApiError = require("../utils/ApiError");
 const { generatePublicKey, generateSecretKey, hashKey } = require("../utils/apiKey");
 const { encrypt } = require("../utils/crypto");
@@ -90,9 +91,26 @@ const regenerateSecretKey = async (botId, userId) => {
 // data: if the bot already has chunks stored under a different vector
 // dimension, the caller must pass `confirmReembed: true`, which triggers a
 // full re-embedding of every existing document under the new model.
-const setBotApiKey = async (botId, userId, { type, provider, model, apiKey, confirmReembed }) => {
+const setBotApiKey = async (botId, userId, { type, provider, model, apiKey, credentialId, confirmReembed }) => {
   const bot = await Bot.findOne({ _id: botId, user: userId });
   if (!bot) throw new ApiError(404, "Bot not found");
+
+  // Instead of pasting a raw key, the caller can point at a saved AI
+  // Provider credential (from the Credentials page) — we pull the key (and
+  // provider, if not explicitly overridden) from there instead.
+  if (credentialId) {
+    const cred = await IntegrationCredential.findOne({ _id: credentialId, user: userId, channel: "ai_provider" });
+    if (!cred) throw new ApiError(404, "AI provider credential not found");
+    if (!cred.aiProvider?.apiKey && cred.aiProvider?.provider !== "ollama") {
+      throw new ApiError(400, "That credential has no API key stored");
+    }
+    provider = provider || cred.aiProvider.provider;
+    if (provider !== cred.aiProvider.provider) {
+      throw new ApiError(400, `Credential is for "${cred.aiProvider.provider}", not "${provider}"`);
+    }
+    apiKey = cred.aiProvider.apiKey || apiKey;
+    if (!model && cred.aiProvider.defaultModel) model = cred.aiProvider.defaultModel;
+  }
 
   const encryptedApiKey = apiKey ? encrypt(apiKey) : null;
 
@@ -125,6 +143,9 @@ const setBotApiKey = async (botId, userId, { type, provider, model, apiKey, conf
     bot.llmConfig.provider = provider;
     bot.llmConfig.model = model || bot.llmConfig.model;
     if (apiKey !== undefined) bot.llmConfig.encryptedApiKey = encryptedApiKey;
+    // credentialId is only set when this save came from a saved credential;
+    // a manually-pasted key (or switching provider) detaches it.
+    bot.llmConfig.credentialId = credentialId || null;
     await bot.save();
     return bot;
   }
@@ -163,6 +184,7 @@ const setBotApiKey = async (botId, userId, { type, provider, model, apiKey, conf
     bot.embeddingConfig.provider = provider;
     bot.embeddingConfig.model = finalModel;
     if (apiKey !== undefined) bot.embeddingConfig.encryptedApiKey = encryptedApiKey;
+    bot.embeddingConfig.credentialId = credentialId || null;
     if (newDim) bot.embeddingConfig.lockedDimension = newDim;
     await bot.save();
 

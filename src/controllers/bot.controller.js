@@ -15,12 +15,14 @@ const sanitizeBot = (bot) => ({
     provider: bot.llmConfig.provider,
     model: bot.llmConfig.model,
     usingOwnKey: !!bot.llmConfig.encryptedApiKey,
+    credentialId: bot.llmConfig.credentialId || null,
   },
   embeddingConfig: {
     provider: bot.embeddingConfig.provider,
     model: bot.embeddingConfig.model,
     usingOwnKey: !!bot.embeddingConfig.encryptedApiKey,
     lockedDimension: bot.embeddingConfig.lockedDimension,
+    credentialId: bot.embeddingConfig.credentialId || null,
   },
   widgetConfig: bot.widgetConfig,
   leadConfig: bot.leadConfig,
@@ -153,14 +155,15 @@ const regenerateKey = asyncHandler(async (req, res) => {
 // POST /api/bots/:id/model-config
 // body: { type: "llm"|"embedding", provider, model, apiKey, confirmReembed? }
 const setModelConfig = asyncHandler(async (req, res) => {
-  const { type, provider, model, apiKey, confirmReembed } = req.body;
-  if (!type || !provider) throw new ApiError(400, "type and provider are required");
+  const { type, provider, model, apiKey, credentialId, confirmReembed } = req.body;
+  if (!type || (!provider && !credentialId)) throw new ApiError(400, "type and provider are required");
 
   const bot = await botService.setBotApiKey(req.params.id, req.user._id, {
     type,
     provider,
     model,
     apiKey,
+    credentialId,
     confirmReembed,
   });
 

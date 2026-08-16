@@ -2,8 +2,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const Conversation = require("../models/Conversation");
 const leadService = require("../services/lead.service");
-const emailService = require("../services/email.service");
-const logger = require("../utils/logger");
+const otpDelivery = require("../services/otpDelivery.service");
 
 // POST /api/v1/lead/submit  (auth: bot public key)
 // Called by the widget after the visitor fills the pre-chat form.
@@ -45,12 +44,31 @@ const sendLeadOtp = asyncHandler(async (req, res) => {
 
   const otp = leadService.createLeadOtp(bot._id.toString(), sessionId, type, target);
 
+  // Visitor's name, if they already filled it in on the pre-chat form
+  // (submitLead runs before send-otp in the normal widget flow) — used to
+  // personalize the OTP message via the {name} placeholder.
+  const conversation = await Conversation.findOne({ bot: bot._id, sessionId }).select("visitor.name");
+  const visitorName = conversation?.visitor?.name;
+  const template = bot.leadConfig?.otpMessageTemplate;
+
   if (type === "email") {
-    await emailService.sendLeadVerificationEmail(target, otp, bot.name);
+    await otpDelivery.sendOtpEmail({
+      userId: bot.user,
+      to: target,
+      otp,
+      name: visitorName,
+      botName: bot.name,
+      template,
+    });
   } else {
-    // SMS — log for now; wire Twilio/MSG91 here when ready
-    logger.info(`[SMS OTP] To: ${target} | OTP: ${otp} | Bot: ${bot.name}`);
-    // TODO: await smsService.send(target, `Your ${bot.name} verification code: ${otp}`);
+    await otpDelivery.sendOtpSms({
+      userId: bot.user,
+      to: target,
+      otp,
+      name: visitorName,
+      botName: bot.name,
+      template,
+    });
   }
 
   res.status(200).json({
