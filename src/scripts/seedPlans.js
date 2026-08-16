@@ -16,7 +16,7 @@ const plans = [
       maxDocumentsPerBot: 5,
       maxMessagesPerMonth: 100,
       allowUserOwnApiKey: true,
-      allowedProviders: ["ollama"],
+      allowedProviders: [],
       maxAgents: 0,
       maxTeams: 0,
       maxAgentsPerTeam: 0,

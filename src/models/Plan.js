@@ -26,7 +26,7 @@ const planSchema = new mongoose.Schema(
       allowUserOwnApiKey: { type: Boolean, default: true }, // BYOK always allowed even on free
       allowedProviders: {
         type: [String],
-        default: ["ollama"], // paid plans can add "openai", "anthropic" as platform-provided
+        default: [], // paid plans can add "openai", "anthropic" as platform-provided
       },
 
       // --- Agent System limits ---
