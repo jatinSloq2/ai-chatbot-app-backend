@@ -297,6 +297,27 @@ const receiveWebhook = asyncHandler(async (req, res) => {
         // hard 4xx here can be more disruptive than accepting-and-flagging a
         // handful of bad-signature events.
         logger.warn("[whatsapp] Webhook signature verification FAILED — storing event anyway, flagged as unverified");
+        const appSecret = process.env.WHATSAPP_APP_SECRET || "";
+        const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
+
+        const computed = "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody).digest("hex");
+        logger.warn("[whatsapp][debug] " + JSON.stringify({
+            method: req.method,
+            url: req.originalUrl,
+            WHATSAPP_VERIFY_TOKEN: WHATSAPP_VERIFY_TOKEN,
+            contentType: req.headers["content-type"],
+            contentLength: req.headers["content-length"],
+            bodyByteLength: rawBody ? rawBody.length : null,
+            bodyIsBuffer: Buffer.isBuffer(rawBody),
+            receivedSignature: signatureHeader || null,
+            computedSignature: computed,
+            appSecretLength: appSecret.length,
+            appSecretHasWhitespace: /^\s|\s$/.test(appSecret),
+            bodyPreview: rawBody
+                ? rawBody.toString("utf8").slice(0, 80) +
+                (rawBody.length > 160 ? " ... " + rawBody.toString("utf8").slice(-80) : "")
+                : null,
+        }));
     }
 
     let payload;
