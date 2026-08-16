@@ -3,10 +3,34 @@ const Team = require("../models/Team");
 const Bot = require("../models/Bot");
 const Conversation = require("../models/Conversation");
 const CannedResponse = require("../models/CannedResponse");
+const IntegrationCredential = require("../models/IntegrationCredential");
 const ApiError = require("../utils/ApiError");
 const notificationService = require("./notification.service");
 const realtimeService = require("./realtime.service");
+const whatsappSender = require("./whatsappSender.service");
+const logger = require("../utils/logger");
 const { isWithinBusinessHours, describeBusinessHours } = require("./businessHours.service");
+
+// A conversation with type:"whatsapp" has no SSE/poll listener on the other
+// end — the visitor's only "client" is WhatsApp itself. So whenever an
+// agent (or the AI, via appendVisitorMessage's counterpart) writes an
+// assistant message into one of these, it also has to be pushed out over
+// the Cloud API, or the visitor never sees it. Best-effort: a delivery
+// failure here shouldn't roll back a message that's already saved and
+// visible in the agent's dashboard.
+const relayToWhatsappIfNeeded = async (conversation, text) => {
+    if (conversation.type !== "whatsapp" || !text?.trim()) return;
+    try {
+        const bot = await Bot.findById(conversation.bot).select("whatsappConfig");
+        const credentialId = bot?.whatsappConfig?.credentialId;
+        if (!credentialId) return;
+        const credential = await IntegrationCredential.findOne({ _id: credentialId, channel: "whatsapp", isActive: true });
+        if (!credential) return;
+        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: conversation.sessionId, message: text });
+    } catch (err) {
+        logger.error(`[whatsapp] Failed to relay agent reply for conversation ${conversation._id}: ${err.message}`);
+    }
+};
 
 // Bots this agent is allowed to see conversations for: bots they're directly
 // linked to, bots that directly assign them, or bots that assign a team
@@ -303,6 +327,12 @@ const sendAgentMessage = async (agent, conversationId, message, options = {}) =>
     }
 
     realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+
+    // Fire-and-forget: WhatsApp conversations have no realtime listener on
+    // the visitor's end, so this is the only way the agent's reply actually
+    // reaches them. Widget messages already reach the visitor via the
+    // realtime publish above and don't need this.
+    relayToWhatsappIfNeeded(conversation, message).catch(() => { });
 
     return conversation;
 };

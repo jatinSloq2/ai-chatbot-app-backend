@@ -30,6 +30,7 @@ const sanitizeBot = (bot) => ({
   assignedTeams: bot.assignedTeams,
   agentConfig: bot.agentConfig,
   businessHours: bot.businessHours,
+  whatsappConfig: bot.whatsappConfig,
   isActive: bot.isActive,
   documentCount: bot.documentCount,
   messagesThisMonth: bot.messagesThisMonth,
@@ -285,6 +286,48 @@ const setLanguageConfig = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
 });
 
+// POST /api/bots/:id/whatsapp-channel
+// body: { enabled?, credentialId? }
+// Links this bot to one of the owner's saved WhatsApp credentials so
+// inbound messages to that number get routed here. A credential can only
+// be enabled on one bot at a time — enabling it here silently disables it
+// on any other bot it was previously wired to, mirroring how a real phone
+// number can only ring one place.
+const setWhatsappChannel = asyncHandler(async (req, res) => {
+  const { enabled, credentialId } = req.body;
+
+  const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
+  if (!bot) throw new ApiError(404, "Bot not found");
+
+  if (credentialId !== undefined) {
+    if (credentialId) {
+      const IntegrationCredential = require("../models/IntegrationCredential");
+      const cred = await IntegrationCredential.findOne({
+        _id: credentialId,
+        user: req.user._id,
+        channel: "whatsapp",
+      });
+      if (!cred) throw new ApiError(404, "WhatsApp credential not found");
+
+      await Bot.updateMany(
+        { user: req.user._id, _id: { $ne: bot._id }, "whatsappConfig.credentialId": credentialId },
+        { $set: { "whatsappConfig.enabled": false } }
+      );
+    }
+    bot.whatsappConfig.credentialId = credentialId || null;
+  }
+
+  if (enabled !== undefined) {
+    if (enabled && !bot.whatsappConfig.credentialId) {
+      throw new ApiError(400, "Select a WhatsApp credential before enabling this channel");
+    }
+    bot.whatsappConfig.enabled = !!enabled;
+  }
+
+  await bot.save();
+  res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
+});
+
 module.exports = {
   createBot,
   listBots,
@@ -296,4 +339,5 @@ module.exports = {
   setAgentConfig,
   setBusinessHours,
   setLanguageConfig,
+  setWhatsappChannel,
 };

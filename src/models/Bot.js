@@ -137,6 +137,17 @@ const botSchema = new mongoose.Schema(
       },
     },
 
+    // --- WhatsApp channel (Meta Cloud API) ---
+    // Links this bot to one of the owner's saved WhatsApp credentials
+    // (Credentials → WhatsApp tab). Inbound messages to that number are
+    // routed to this bot and answered the same way the widget is —
+    // same RAG/LLM pipeline, same handover state machine — just delivered
+    // back out over WhatsApp instead of SSE. See whatsapp.controller.js.
+    whatsappConfig: {
+      enabled: { type: Boolean, default: false },
+      credentialId: { type: mongoose.Schema.Types.ObjectId, ref: "IntegrationCredential", default: null },
+    },
+
     // --- Human agent handover (Agent System) ---
     // Which agents/teams can be handed a conversation on this bot, and
     // whether handover is offered at all. The actual handover trigger logic

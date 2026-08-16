@@ -67,12 +67,15 @@ const conversationSchema = new mongoose.Schema(
   {
     bot: { type: mongoose.Schema.Types.ObjectId, ref: "Bot", required: true, index: true },
     sessionId: { type: String, required: true, index: true }, // generated client-side, persisted in widget's localStorage
-    // "widget" = a real visitor talking through the embedded widget
-    // "test"   = the bot owner using the Test Chat tab in the dashboard
-    type: { type: String, enum: ["widget", "test"], default: "widget", index: true },
+    // "widget"   = a real visitor talking through the embedded widget
+    // "test"     = the bot owner using the Test Chat tab in the dashboard
+    // "whatsapp" = a visitor messaging the bot's connected WhatsApp number
+    type: { type: String, enum: ["widget", "test", "whatsapp"], default: "widget", index: true },
 
     // Visitor identity captured by the widget's pre-chat form (see Bot.leadConfig).
     // All fields optional/null until the visitor fills the form / verifies.
+    // For type:"whatsapp", `phone` is set immediately from the sender's
+    // WhatsApp number (sessionId IS that number) rather than a form.
     visitor: {
       name: { type: String, default: null, trim: true },
       email: { type: String, default: null, trim: true, lowercase: true },

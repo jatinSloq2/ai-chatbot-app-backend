@@ -11,36 +11,37 @@ const mongoose = require("mongoose");
 
 const messageEventSchema = new mongoose.Schema(
   {
-    bot:      { type: mongoose.Schema.Types.ObjectId, ref: "Bot", required: true, index: true },
-    user:     { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    bot: { type: mongoose.Schema.Types.ObjectId, ref: "Bot", required: true, index: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
 
-    // "widget" = real visitor on a customer site, "test" = owner testing in dashboard
+    // "widget" = real visitor on a customer site, "test" = owner testing in
+    // dashboard, "whatsapp" = real visitor messaging the bot's WhatsApp number
     type: {
       type: String,
-      enum: ["widget", "test"],
+      enum: ["widget", "test", "whatsapp"],
       required: true,
       index: true,
     },
 
     // Widget usage tracking — which site embedded this bot
-    origin:    { type: String, default: null },  // e.g. "https://acme.com"
-    domain:    { type: String, default: null },  // e.g. "acme.com" (parsed from origin)
+    origin: { type: String, default: null },  // e.g. "https://acme.com"
+    domain: { type: String, default: null },  // e.g. "acme.com" (parsed from origin)
     userAgent: { type: String, default: null },
-    ip:        { type: String, default: null },  // hashed, not raw — privacy-safe
+    ip: { type: String, default: null },  // hashed, not raw — privacy-safe
 
     sessionId: { type: String, default: null, index: true },
 
     // Message stats
-    promptTokensEstimate:    { type: Number, default: 0 }, // rough estimate: chars/4
-    responseTokensEstimate:  { type: Number, default: 0 },
-    chunksRetrieved:         { type: Number, default: 0 },
-    topChunkScore:           { type: Number, default: null },
+    promptTokensEstimate: { type: Number, default: 0 }, // rough estimate: chars/4
+    responseTokensEstimate: { type: Number, default: 0 },
+    chunksRetrieved: { type: Number, default: 0 },
+    topChunkScore: { type: Number, default: null },
 
     // Timing (ms)
-    embeddingMs:   { type: Number, default: null },
-    retrievalMs:   { type: Number, default: null },
-    llmMs:         { type: Number, default: null },
-    totalMs:       { type: Number, default: null },
+    embeddingMs: { type: Number, default: null },
+    retrievalMs: { type: Number, default: null },
+    llmMs: { type: Number, default: null },
+    totalMs: { type: Number, default: null },
 
     // Was the response successfully generated?
     success: { type: Boolean, default: true },

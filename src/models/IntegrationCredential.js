@@ -63,10 +63,20 @@ const EmailCredentialSchema = new Schema(
 // ---------- WHATSAPP (Meta Cloud API) ----------
 const WhatsappCredentialSchema = new Schema(
   {
+    // Human-readable Meta Business phone number, e.g. "+91 98765 43210" —
+    // shown in the dashboard so an owner can tell numbers apart at a
+    // glance. Distinct from phoneNumberId, which is the opaque Graph API
+    // identifier actually used to call/receive on Meta's side.
+    phoneNumber: { type: String, trim: true, required: true },
     phoneNumberId: { type: String, trim: true, required: true },
     wabaId: { type: String, trim: true, required: true },
     appId: { type: String, trim: true },
     accessToken: secretField,
+    // Not user-provided: the webhook URL and verify token are fixed,
+    // platform-wide values (see WHATSAPP_VERIFY_TOKEN / app.js) shown to
+    // every user to paste into Meta's App Dashboard. Kept here only so an
+    // already-created credential can still be inspected/migrated; new
+    // credentials no longer collect this from the form.
     webhookVerifyToken: secretField,
     businessVerificationStatus: {
       type: String,

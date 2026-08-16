@@ -129,15 +129,25 @@ const createEmailApi = asyncHandler(async (req, res) => {
 // consent-screen flow — see controllers/oauth.controller.js.
 
 // POST /api/credentials/whatsapp
-const createWhatsapp = createFor("whatsapp", [
-  "phoneNumberId",
-  "wabaId",
-  "appId",
-  "accessToken",
-  "webhookVerifyToken",
-  "businessVerificationStatus",
-  "tokenType",
-]);
+// Only phoneNumber, phoneNumberId, wabaId and accessToken are ever
+// collected from the user — the webhook URL and verify token are fixed,
+// platform-wide values shown to them (see WHATSAPP_VERIFY_TOKEN), not
+// something they configure per number. Embedded signup will eventually
+// replace this manual form entirely.
+const createWhatsapp = asyncHandler(async (req, res) => {
+  const { label, isDefault, phoneNumber, phoneNumberId, wabaId, appId, accessToken } = req.body;
+  if (!phoneNumber?.trim() || !phoneNumberId?.trim() || !wabaId?.trim() || !accessToken?.trim()) {
+    throw new ApiError(400, "Phone number, Phone Number ID, WABA ID and access token are all required");
+  }
+  const cred = await credentialService.createCredential({
+    userId: req.user._id,
+    channel: "whatsapp",
+    label,
+    isDefault,
+    payload: { phoneNumber, phoneNumberId, wabaId, appId, accessToken },
+  });
+  res.status(201).json({ success: true, data: { credential: sanitizeCredential(cred) } });
+});
 
 // POST /api/credentials/sms
 const createSms = createFor("sms", [
