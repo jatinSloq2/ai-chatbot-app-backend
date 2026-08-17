@@ -24,6 +24,8 @@ const sanitizeUser = (user) => ({
   avatar: user.avatar,
   authProvider: user.authProvider,
   isEmailVerified: user.isEmailVerified,
+  role: user.role,
+  referralCode: user.referralCode,
   createdAt: user.createdAt,
 });
 
@@ -40,8 +42,8 @@ const setAuthCookies = (res, accessToken, refreshToken) => {
 
 // POST /api/auth/signup
 const signup = asyncHandler(async (req, res) => {
-  const { name, email, password } = req.body;
-  const user = await authService.signup({ name, email, password });
+  const { name, email, password, referralCode } = req.body;
+  const user = await authService.signup({ name, email, password, referralCode });
 
   res.status(201).json({
     success: true,

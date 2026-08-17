@@ -3,6 +3,7 @@ const User = require("../models/User");
 const ApiError = require("../utils/ApiError");
 const { generateOtp, hashOtp, compareOtp, getOtpExpiry } = require("../utils/otp");
 const { sendOtpEmail } = require("./email.service");
+const referralService = require("./referral.service");
 const {
   generateAccessToken,
   generateRefreshToken,
@@ -13,7 +14,7 @@ const admin = require("../config/firebase");
 const MAX_OTP_ATTEMPTS = 5;
 
 // --- SIGNUP (email + password) ---
-const signup = async ({ name, email, password }) => {
+const signup = async ({ name, email, password, referralCode }) => {
   const existingUser = await User.findOne({ email });
   if (existingUser) {
     throw new ApiError(409, "An account with this email already exists");
@@ -28,6 +29,18 @@ const signup = async ({ name, email, password }) => {
     authProvider: "local",
     isEmailVerified: false,
   });
+
+  // Referral code at signup is optional and best-effort — an invalid/typo'd
+  // code should never block account creation. Same one-time-use rule as
+  // applying it later from the profile page (see referral.service).
+  if (referralCode?.trim()) {
+    try {
+      await referralService.applyReferralCode(user._id, referralCode);
+    } catch (err) {
+      // Swallow — invalid code, self-referral, etc. User just signs up
+      // without a referrer attached.
+    }
+  }
 
   await sendVerificationOtp(email);
 

@@ -104,7 +104,6 @@ const summarizeChange = (change) => {
             kind: "message",
             phoneNumberId: value.metadata?.phone_number_id || null,
             from: message.from || null,
-            messageId: message.id || null, // <-- ADD THIS
             messageType: message.type || null,
             preview:
                 message.text?.body?.slice(0, 200) ||
@@ -146,7 +145,7 @@ const withLanguageInstruction = (systemPrompt, languageCode) => {
  * turned into an apologetic reply to the sender, since this runs after the
  * webhook has already ack'd 200 and nothing is listening for a thrown error.
  */
-const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) => {
+const handleInboundMessage = async ({ phoneNumberId, from, text }) => {
     const credential = await IntegrationCredential.findOne({
         channel: "whatsapp",
         "whatsapp.phoneNumberId": phoneNumberId,
@@ -217,14 +216,6 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) =>
             logger.error(`[whatsapp] Unexpected error checking usage for bot ${bot._id}: ${err.message}`);
         }
         return;
-    }
-
-    // Best-effort — a failed typing indicator should never block the actual
-    // reply. Fire-and-continue, don't await-and-throw.
-    if (messageId) {
-        whatsappSender
-            .sendTypingIndicator(credential.whatsapp, { messageId })
-            .catch((err) => logger.warn(`[whatsapp] Failed to send typing indicator to ${from}: ${err.message}`));
     }
 
     const totalStart = Date.now();
@@ -406,7 +397,6 @@ const receiveWebhook = asyncHandler(async (req, res) => {
                     await handleInboundMessage({
                         phoneNumberId: summary.phoneNumberId,
                         from: summary.from,
-                        messageId: summary.messageId, // NEW
                         text: messageBody,
                     });
                     if (eventDoc) await WhatsAppEvent.updateOne({ _id: eventDoc._id }, { $set: { processed: true } });
