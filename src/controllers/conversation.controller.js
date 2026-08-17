@@ -2,6 +2,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const Bot = require("../models/Bot");
 const Conversation = require("../models/Conversation");
+const handoverService = require("../services/handover.service");
 
 const ensureOwnedBot = async (botId, userId) => {
   const bot = await Bot.findOne({ _id: botId, user: userId });
@@ -75,4 +76,37 @@ const getConversation = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { listConversations, getConversation };
+// POST /api/bots/:id/conversations/:sessionId/handover
+// Lets the bot owner manually connect a conversation to a human agent —
+// mainly for channels like WhatsApp where the visitor has no "Talk to a
+// human" button of their own to click (that's a widget-only affordance).
+// Reuses the same handoverService the public widget uses, so it honors the
+// same assignEnabled / business-hours / agent-availability rules.
+const requestConversationHandover = asyncHandler(async (req, res) => {
+  const bot = await ensureOwnedBot(req.params.id, req.user._id);
+
+  const conversation = await Conversation.findOne({ bot: bot._id, sessionId: req.params.sessionId });
+  if (!conversation) throw new ApiError(404, "Conversation not found");
+
+  if (conversation.handover?.status === "assigned") {
+    throw new ApiError(400, "This conversation is already connected to an agent");
+  }
+
+  const result = await handoverService.requestHandover(bot, req.params.sessionId);
+
+  if (result.offHours) {
+    return res.status(200).json({
+      success: true,
+      message: result.message || "No agent is available right now (outside business hours)",
+      data: { offHours: true },
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    message: "Conversation is now waiting for an agent to pick it up",
+    data: { conversation: result.conversation },
+  });
+});
+
+module.exports = { listConversations, getConversation, requestConversationHandover };

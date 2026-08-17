@@ -48,6 +48,8 @@ router.post(
 router.post("/refresh-token", authController.refreshToken);
 router.post("/logout", protect, authController.logout);
 router.get("/me", protect, authController.getMe);
+router.patch("/me", protect, authController.updateMe);
+router.get("/me/export", protect, authController.exportMyData);
 router.post("/change-password", protect, strictLimiter, authController.changePassword);
 router.post("/add-password", protect, strictLimiter, authController.addPassword);
 router.delete("/account", protect, strictLimiter, authController.deleteAccount);

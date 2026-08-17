@@ -176,6 +176,27 @@ const getMe = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { user: sanitizeUser(req.user) } });
 });
 
+// PATCH /api/auth/me
+// body: { name?, avatar? } — avatar is a plain URL string, same convention
+// as Agent.avatar; there's no image-upload endpoint for this yet.
+const updateMe = asyncHandler(async (req, res) => {
+  const { name, avatar } = req.body;
+  if (name === undefined && avatar === undefined) {
+    throw new ApiError(400, "Provide at least one of: name, avatar");
+  }
+
+  const user = await authService.updateProfile({ userId: req.user._id, name, avatar });
+  res.status(200).json({ success: true, message: "Profile updated", data: { user: sanitizeUser(user) } });
+});
+
+// GET /api/auth/me/export
+// Returns everything the platform holds about this account as a single
+// JSON payload — the "Download all of your data" button in Settings.
+const exportMyData = asyncHandler(async (req, res) => {
+  const data = await authService.exportAccountData(req.user._id);
+  res.status(200).json({ success: true, data });
+});
+
 // POST /api/auth/change-password
 // body: { currentPassword, newPassword }
 const changePassword = asyncHandler(async (req, res) => {
@@ -256,6 +277,8 @@ module.exports = {
   refreshToken,
   logout,
   getMe,
+  updateMe,
+  exportMyData,
   changePassword,
   addPassword,
   deleteAccount,

@@ -57,6 +57,26 @@ const getReferralOverview = async (userId) => {
   const user = await User.findById(userId).populate("referredBy", "name referralCode");
   if (!user) throw new ApiError(404, "User not found");
 
+  // Defensive backfill: accounts created before the referralCode field
+  // existed (or created through a path that skipped the pre("save") hook)
+  // would otherwise show a blank code on the settings page forever. Since
+  // the pre-save hook only assigns a code on `isNew` documents, an existing
+  // user with no code never gets one automatically — generate and persist
+  // one here the first time it's requested.
+  if (!user.referralCode) {
+    for (let attempt = 0; attempt < 5 && !user.referralCode; attempt++) {
+      const base = (user.name || "USER").replace(/[^a-zA-Z]/g, "").slice(0, 5).toUpperCase() || "USER";
+      const candidate = `${base}${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
+      // eslint-disable-next-line no-await-in-loop
+      const exists = await User.exists({ referralCode: candidate });
+      if (!exists) user.referralCode = candidate;
+    }
+    if (!user.referralCode) {
+      user.referralCode = `USER${Date.now().toString(36).toUpperCase()}`;
+    }
+    await user.save();
+  }
+
   const [referralsCount, rewardsThisMonth, wallet] = await Promise.all([
     User.countDocuments({ referredBy: user._id }),
     ReferralReward.countDocuments({

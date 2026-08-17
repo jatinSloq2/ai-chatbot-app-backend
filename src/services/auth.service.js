@@ -219,6 +219,24 @@ const addPassword = async ({ userId, newPassword }) => {
   return user;
 };
 
+// --- Update profile (name / avatar) ---
+const updateProfile = async ({ userId, name, avatar }) => {
+  const user = await User.findById(userId);
+  if (!user) throw new ApiError(404, "User not found");
+
+  if (name !== undefined) {
+    const trimmed = String(name).trim();
+    if (!trimmed) throw new ApiError(400, "Name can't be empty");
+    user.name = trimmed;
+  }
+  if (avatar !== undefined) {
+    user.avatar = avatar ? String(avatar).trim() : null;
+  }
+
+  await user.save();
+  return user;
+};
+
 // --- Permanently delete an account and every resource it owns ---
 const deleteAccount = async (userId) => {
   const Bot = require("../models/Bot");
@@ -226,6 +244,11 @@ const deleteAccount = async (userId) => {
   const Chunk = require("../models/Chunk");
   const Conversation = require("../models/Conversation");
   const Subscription = require("../models/Subscription");
+  const Agent = require("../models/Agent");
+  const Team = require("../models/Team");
+  const CannedResponse = require("../models/CannedResponse");
+  const IntegrationCredential = require("../models/IntegrationCredential");
+  const WalletTransaction = require("../models/WalletTransaction");
 
   const bots = await Bot.find({ user: userId }).select("_id");
   const botIds = bots.map((b) => b._id);
@@ -236,10 +259,85 @@ const deleteAccount = async (userId) => {
     Conversation.deleteMany({ bot: { $in: botIds } }),
     Bot.deleteMany({ user: userId }),
     Subscription.deleteMany({ user: userId }),
+    // Agents/teams/canned responses/credentials belong to the owner
+    // account directly (not per-bot), so they're otherwise left orphaned
+    // once the account is gone — this is what a "delete all my data"
+    // action needs to actually mean.
+    Agent.deleteMany({ owner: userId }),
+    Team.deleteMany({ owner: userId }),
+    CannedResponse.deleteMany({ owner: userId }),
+    IntegrationCredential.deleteMany({ user: userId }),
+    WalletTransaction.deleteMany({ user: userId }),
   ]);
 
   await User.findByIdAndDelete(userId);
 };
+
+// --- Export every piece of data the platform holds about this account ---
+// Used by the "Download all of your data" button in Settings. Pulls
+// straight from the models (not the sanitized API DTOs) so nothing the
+// account owns is left out, while excluding secrets (password hashes,
+// refresh tokens, credential access tokens/app secrets).
+const exportAccountData = async (userId) => {
+  const Bot = require("../models/Bot");
+  const Document = require("../models/Document");
+  const Conversation = require("../models/Conversation");
+  const Subscription = require("../models/Subscription");
+  const Agent = require("../models/Agent");
+  const Team = require("../models/Team");
+  const CannedResponse = require("../models/CannedResponse");
+  const IntegrationCredential = require("../models/IntegrationCredential");
+  const WalletTransaction = require("../models/WalletTransaction");
+  const ReferralReward = require("../models/ReferralReward");
+
+  const user = await User.findById(userId).select("-password -refreshTokenHash");
+  if (!user) throw new ApiError(404, "User not found");
+
+  const bots = await Bot.find({ user: userId });
+  const botIds = bots.map((b) => b._id);
+
+  const [
+    documents,
+    conversations,
+    subscriptions,
+    agents,
+    teams,
+    cannedResponses,
+    credentials,
+    walletTransactions,
+    referralRewards,
+  ] = await Promise.all([
+    Document.find({ bot: { $in: botIds } }).select("-chunks"),
+    Conversation.find({ bot: { $in: botIds } }),
+    Subscription.find({ user: userId }),
+    Agent.find({ owner: userId }).select("-password"),
+    Team.find({ owner: userId }),
+    CannedResponse.find({ owner: userId }),
+    // Never export raw secrets — just enough to recognize which
+    // integration a row is, not the credential itself.
+    IntegrationCredential.find({ user: userId }).select(
+      "channel label isActive isDefault createdAt updatedAt"
+    ),
+    WalletTransaction.find({ user: userId }),
+    ReferralReward.find({ referrer: userId }),
+  ]);
+
+  return {
+    exportedAt: new Date().toISOString(),
+    profile: user,
+    bots,
+    documents,
+    conversations,
+    subscriptions,
+    agents,
+    teams,
+    cannedResponses,
+    credentials,
+    walletTransactions,
+    referralRewards,
+  };
+};
+
 const issueTokens = async (user) => {
   const accessToken = generateAccessToken(user._id.toString());
   const refreshToken = generateRefreshToken(user._id.toString());
@@ -261,5 +359,7 @@ module.exports = {
   issueTokens,
   changePassword,
   addPassword,
+  updateProfile,
   deleteAccount,
+  exportAccountData,
 };

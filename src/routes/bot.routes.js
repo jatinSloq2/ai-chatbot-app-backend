@@ -25,6 +25,7 @@ router.post("/:id/test-chat", chatController.testChat);
 // Conversations
 router.get("/:id/conversations", conversationController.listConversations);
 router.get("/:id/conversations/:sessionId", conversationController.getConversation);
+router.post("/:id/conversations/:sessionId/handover", conversationController.requestConversationHandover);
 
 // Analytics (all from new analytics controller)
 router.get("/:id/analytics", analyticsController.getBotAnalytics);

@@ -1,6 +1,7 @@
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const agentService = require("../services/agent.service");
+const Conversation = require("../models/Conversation");
 const { getActivePlan } = require("../services/bot.service");
 
 const csatAverage = (performance) =>
@@ -79,4 +80,49 @@ const deleteAgent = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, message: "Agent deleted" });
 });
 
-module.exports = { createAgent, listAgents, getAgent, updateAgent, deleteAgent, sanitizeAgent };
+// GET /api/agents/:id/conversations?page=1&limit=20
+// Every conversation this agent has been (or currently is) assigned to,
+// across all of the owner's bots — for the agent detail page. Ownership is
+// enforced via getOwnedAgent so an owner can't page through another
+// account's agent's chats.
+const listAgentConversations = asyncHandler(async (req, res) => {
+  const agent = await agentService.getOwnedAgent(req.params.id, req.user._id);
+
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const limit = Math.min(50, parseInt(req.query.limit) || 20);
+  const filter = { "handover.assignedAgent": agent._id };
+
+  const [conversations, total] = await Promise.all([
+    Conversation.find(filter)
+      .sort({ updatedAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .select("sessionId bot type visitor messages handover createdAt updatedAt")
+      .populate("bot", "name"),
+    Conversation.countDocuments(filter),
+  ]);
+
+  const summarized = conversations.map((c) => ({
+    sessionId: c.sessionId,
+    botId: c.bot?._id,
+    botName: c.bot?.name || "Deleted bot",
+    type: c.type,
+    visitor: c.visitor,
+    messageCount: c.messages.length,
+    lastMessage: c.messages[c.messages.length - 1]?.content?.slice(0, 120) || "",
+    handoverStatus: c.handover.status,
+    csat: c.handover.csat?.rating ? c.handover.csat : null,
+    startedAt: c.createdAt,
+    lastActivityAt: c.updatedAt,
+  }));
+
+  res.status(200).json({
+    success: true,
+    data: {
+      conversations: summarized,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    },
+  });
+});
+
+module.exports = { createAgent, listAgents, getAgent, updateAgent, deleteAgent, listAgentConversations, sanitizeAgent };
