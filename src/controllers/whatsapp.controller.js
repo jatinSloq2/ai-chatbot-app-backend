@@ -104,6 +104,7 @@ const summarizeChange = (change) => {
             kind: "message",
             phoneNumberId: value.metadata?.phone_number_id || null,
             from: message.from || null,
+            messageId: message.id || null, // <-- ADD THIS
             messageType: message.type || null,
             preview:
                 message.text?.body?.slice(0, 200) ||
