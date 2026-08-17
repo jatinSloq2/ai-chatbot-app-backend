@@ -86,6 +86,11 @@ const requestHandover = async (bot, sessionId) => {
 
         realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
 
+        // The widget shows this by re-fetching and rendering the new
+        // assistant message above — but a WhatsApp visitor has no such
+        // fetch loop, so it has to be pushed out over the Cloud API too.
+        await relayToWhatsappIfNeeded(conversation, message);
+
         return {
             conversation,
             offHours: true,
@@ -123,7 +128,15 @@ const requestHandover = async (bot, sessionId) => {
     // their pending list refetches immediately instead of on the next poll tick.
     realtimeService.publish(`bot-handovers:${bot._id}`, "update", { scope: "pending" });
 
-    return { conversation, offHours: false };
+    // Same reasoning as the offHours branch above: the widget's own UI
+    // already communicates "waiting for an agent", a WhatsApp visitor needs
+    // an actual message telling them so.
+    const requestedMessage =
+        bot.agentConfig?.handoverRequestedMessage ||
+        "Got it — connecting you to one of our team members. Someone will join the chat shortly.";
+    await relayToWhatsappIfNeeded(conversation, requestedMessage);
+
+    return { conversation, offHours: false, message: requestedMessage };
 };
 
 // Visitor sends a message while handover is active — goes straight into the
@@ -263,7 +276,10 @@ const acceptHandover = async (agentId, conversationId) => {
         throw new ApiError(409, "This chat was already taken by another agent, or is no longer waiting");
     }
 
-    await Agent.updateOne({ _id: agentId }, { $inc: { "performance.assignedCount": 1 } });
+    const [agent] = await Promise.all([
+        Agent.findById(agentId).select("name"),
+        Agent.updateOne({ _id: agentId }, { $inc: { "performance.assignedCount": 1 } }),
+    ]);
 
     // Tell other agents' pending lists this chat is gone, tell the accepting
     // agent's own dashboard to pick up their new assignment, and tell the
@@ -271,6 +287,17 @@ const acceptHandover = async (agentId, conversationId) => {
     realtimeService.publish(`bot-handovers:${conversation.bot}`, "update", { scope: "pending" });
     realtimeService.publish(`agent-assigned:${agentId}`, "update", { scope: "assigned" });
     realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+
+    // The widget picks this up from the realtime publish above (renders the
+    // agent's name/badge). A WhatsApp visitor can't see that, so tell them
+    // directly, same as the "waiting for an agent" message earlier.
+    if (conversation.type === "whatsapp") {
+        const bot = await Bot.findById(conversation.bot).select("agentConfig");
+        const template =
+            bot?.agentConfig?.handoverConnectedMessage || "You're now connected with {agentName}. They'll be right with you.";
+        const message = template.replace("{agentName}", agent?.name || "an agent");
+        await relayToWhatsappIfNeeded(conversation, message);
+    }
 
     return conversation;
 };
@@ -350,6 +377,14 @@ const resolveHandover = async (agentId, conversationId) => {
 
     realtimeService.publish(`agent-assigned:${agentId}`, "update", { scope: "assigned" });
     realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+
+    if (conversation.type === "whatsapp") {
+        const bot = await Bot.findById(conversation.bot).select("agentConfig");
+        const message =
+            bot?.agentConfig?.handoverResolvedMessage ||
+            "This chat has been marked as resolved. Feel free to message us again anytime!";
+        await relayToWhatsappIfNeeded(conversation, message);
+    }
 
     return conversation;
 };

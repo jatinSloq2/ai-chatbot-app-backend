@@ -170,6 +170,27 @@ const botSchema = new mongoose.Schema(
         default:
           "As of now, no agent is available — these are our off hours. You can continue chatting with our AI assistant, and we'll follow up by email as soon as we're back.",
       },
+      // Sent the moment a handover request is created (widget: right after
+      // the "Talk to a human" click; WhatsApp: right after the visitor's
+      // text is recognised as an agent request) — mainly to give the
+      // WhatsApp visitor SOME acknowledgement, since they have no spinner
+      // or "waiting for agent" UI the way the widget does.
+      handoverRequestedMessage: {
+        type: String,
+        default: "Got it — connecting you to one of our team members. Someone will join the chat shortly.",
+      },
+      // Sent once an agent actually accepts the request. Same WhatsApp-only
+      // reasoning as above — the widget shows this visually (assigned-agent
+      // name/badge) so it doesn't need a text message.
+      handoverConnectedMessage: {
+        type: String,
+        default: "You're now connected with {agentName}. They'll be right with you.",
+      },
+      // Sent when the agent marks the chat resolved.
+      handoverResolvedMessage: {
+        type: String,
+        default: "This chat has been marked as resolved. Feel free to message us again anytime!",
+      },
     },
 
     // --- Business hours (human handover) ---

@@ -13,6 +13,11 @@ const handoverService = require("../services/handover.service");
 const analyticsService = require("../services/analytics.service");
 const whatsappSender = require("../services/whatsappSender.service");
 const { getLanguageName } = require("../utils/i18n");
+const {
+    looksLikeHandoverRequest,
+    withHandoverSentinelInstruction,
+    isHandoverSentinelResponse,
+} = require("../utils/handoverIntent");
 
 /**
  * GET /api/whatsapp/webhook
@@ -134,6 +139,24 @@ const withLanguageInstruction = (systemPrompt, languageCode) => {
     return `${systemPrompt}\n\nRespond in ${getLanguageName(languageCode)} (language code: ${languageCode}), regardless of what language the provided context is written in.`;
 };
 
+// Kicks off a handover request for a WhatsApp visitor. Returns true if it
+// actually did (meaning: stop, don't also run the AI on this message),
+// false if it declined (handover not enabled / no agents available) — in
+// which case the caller should just fall through to the normal AI answer
+// rather than leaving the visitor's message unanswered.
+// handoverService.requestHandover already takes care of messaging the
+// visitor itself (the "connecting you..." / off-hours text), so there's
+// nothing left to send here on the success path.
+const triggerWhatsappHandover = async (bot, from) => {
+    try {
+        await handoverService.requestHandover(bot, from);
+        return true;
+    } catch (err) {
+        logger.warn(`[whatsapp] Handover request from ${from} on bot ${bot._id} declined: ${err.message}`);
+        return false;
+    }
+};
+
 /**
  * Runs one inbound WhatsApp text message through the exact same brain the
  * widget uses — RAG retrieval + LLM completion, or straight into the
@@ -205,6 +228,22 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) =>
         return;
     }
 
+    // WhatsApp has no "Talk to a human" button for the visitor to tap (see
+    // chat.controller.js's request-handover endpoint, which is the widget's
+    // equivalent) — this is the only way in. A simple keyword match catches
+    // the obvious phrasings ("connect me to agent", "talk to human",
+    // "executive", ...) cheaply and without an extra LLM call. Anything it
+    // misses still has a second chance below, once the AI has actually seen
+    // the message (see the HANDOVER_REQUEST sentinel check after the LLM
+    // call) — that one understands intent semantically, so it also covers
+    // phrasing/languages this list doesn't.
+    if (conversation.handover.status === "none" && looksLikeHandoverRequest(text)) {
+        const handoverStarted = await triggerWhatsappHandover(bot, from);
+        if (handoverStarted) return;
+        // Declined (handover disabled / no agents on this bot) — don't leave
+        // the visitor hanging, just let the AI take the message normally.
+    }
+
     let plan;
     try {
         plan = await botService.checkAndIncrementMessageUsage(bot);
@@ -246,8 +285,17 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) =>
 
         const retrStart = Date.now();
         const recentHistory = conversation.messages.slice(-10).map((m) => ({ role: m.role, content: m.content }));
+        // bot.agentConfig.assignEnabled gates whether asking for a human is
+        // even worth flagging to the model — no point spending tokens on the
+        // instruction (or risking a false-positive sentinel) on a bot that
+        // has no agents to hand off to anyway.
+        let systemPrompt = withLanguageInstruction(bot.systemPrompt, conversation.visitor.language);
+        if (bot.agentConfig?.assignEnabled) {
+            systemPrompt = withHandoverSentinelInstruction(systemPrompt);
+        }
+
         const messages = ragService.buildRagMessages({
-            systemPrompt: withLanguageInstruction(bot.systemPrompt, conversation.visitor.language),
+            systemPrompt,
             relevantChunks,
             history: recentHistory,
             userMessage: text,
@@ -261,6 +309,34 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) =>
             onToken: () => { }, // no token-by-token streaming over WhatsApp
         });
         llmMs = Date.now() - llmStart;
+
+        // The model judged (semantically, not just via the keyword list
+        // above) that the visitor wants a human — start the same handover
+        // flow instead of sending the raw sentinel text back to them.
+        if (isHandoverSentinelResponse(fullResponse)) {
+            conversation.messages.push({ role: "user", content: text });
+            await conversation.save();
+
+            const handoverStarted = await triggerWhatsappHandover(bot, from);
+            if (!handoverStarted) {
+                // No agents available after all — don't strand the visitor
+                // with silence; give them a real answer instead.
+                fullResponse = await llmService.streamChatCompletion({
+                    llmConfig: bot.llmConfig,
+                    messages: ragService.buildRagMessages({
+                        systemPrompt: withLanguageInstruction(bot.systemPrompt, conversation.visitor.language),
+                        relevantChunks,
+                        history: recentHistory,
+                        userMessage: text,
+                    }),
+                    onToken: () => { },
+                });
+                conversation.messages.push({ role: "assistant", content: fullResponse });
+                await conversation.save();
+                await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: fullResponse });
+            }
+            return;
+        }
 
         conversation.messages.push({ role: "user", content: text });
         conversation.messages.push({ role: "assistant", content: fullResponse });
