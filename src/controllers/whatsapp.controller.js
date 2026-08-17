@@ -47,13 +47,18 @@ const verifyWebhook = (req, res) => {
 
 /**
  * Verifies Meta's X-Hub-Signature-256 header: sha256=<hex HMAC of the raw
- * request body, keyed with your Meta App Secret>. Requires the RAW,
+ * request body, keyed with the Meta App Secret>. Requires the RAW,
  * unparsed body — this is why the route is mounted with express.raw()
  * before the global express.json() (see app.js), same pattern already used
  * for the Razorpay webhook.
+ *
+ * `appSecret` is no longer a single platform-wide env var — every tenant
+ * has their own Meta App (and therefore their own App Secret), stored on
+ * their IntegrationCredential (whatsapp.appSecret). The caller is
+ * responsible for looking up the right credential and passing its
+ * decrypted appSecret in here.
  */
-const isValidSignature = (rawBody, signatureHeader) => {
-    const appSecret = process.env.WHATSAPP_APP_SECRET;
+const isValidSignature = (rawBody, signatureHeader, appSecret) => {
     if (!appSecret || !signatureHeader) return false;
 
     const expected =
@@ -64,6 +69,25 @@ const isValidSignature = (rawBody, signatureHeader) => {
     if (expected.length !== signatureHeader.length) return false;
 
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signatureHeader));
+};
+
+// Pulls the phone_number_id out of the first message/status change in a
+// webhook payload — used purely to figure out WHICH tenant's credential
+// (and therefore which Meta App Secret) this payload should be verified
+// against. A single incoming request always originates from one Meta App
+// (whichever tenant's App owns the webhook subscription that fired), so
+// every entry in the batch shares the same App Secret — checking the first
+// one is enough.
+const extractFirstPhoneNumberId = (payload) => {
+    const entries = Array.isArray(payload?.entry) ? payload.entry : [];
+    for (const entry of entries) {
+        const changes = Array.isArray(entry.changes) ? entry.changes : [];
+        for (const change of changes) {
+            const phoneNumberId = change?.value?.metadata?.phone_number_id;
+            if (phoneNumberId) return phoneNumberId;
+        }
+    }
+    return null;
 };
 
 // Pulls a few human-readable fields out of one "change" entry purely for
@@ -284,41 +308,10 @@ const handleInboundMessage = async ({ phoneNumberId, from, text }) => {
  */
 const receiveWebhook = asyncHandler(async (req, res) => {
     // req.body is a raw Buffer here (see the express.raw() mount in app.js) —
-    // parse it ourselves after signature verification, rather than trusting
-    // an upstream JSON parser to have already touched (and thus altered) it.
+    // parse it ourselves, rather than trusting an upstream JSON parser to
+    // have already touched (and thus altered) it.
     const rawBody = req.body;
     const signatureHeader = req.headers["x-hub-signature-256"];
-    const signatureValid = isValidSignature(rawBody, signatureHeader);
-
-    if (!process.env.WHATSAPP_APP_SECRET) {
-        logger.warn("[whatsapp] WHATSAPP_APP_SECRET is not set — accepting webhook WITHOUT signature verification. Set this before going to production.");
-    } else if (!signatureValid) {
-        // Logged but not rejected outright: Meta's retry/backoff behavior on a
-        // hard 4xx here can be more disruptive than accepting-and-flagging a
-        // handful of bad-signature events.
-        logger.warn("[whatsapp] Webhook signature verification FAILED — storing event anyway, flagged as unverified");
-        const appSecret = process.env.WHATSAPP_APP_SECRET || "";
-        const WHATSAPP_VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
-
-        const computed = "sha256=" + crypto.createHmac("sha256", appSecret).update(rawBody).digest("hex");
-        logger.warn("[whatsapp][debug] " + JSON.stringify({
-            method: req.method,
-            url: req.originalUrl,
-            WHATSAPP_VERIFY_TOKEN: WHATSAPP_VERIFY_TOKEN,
-            contentType: req.headers["content-type"],
-            contentLength: req.headers["content-length"],
-            bodyByteLength: rawBody ? rawBody.length : null,
-            bodyIsBuffer: Buffer.isBuffer(rawBody),
-            receivedSignature: signatureHeader || null,
-            computedSignature: computed,
-            appSecretLength: appSecret.length,
-            appSecretHasWhitespace: /^\s|\s$/.test(appSecret),
-            bodyPreview: rawBody
-                ? rawBody.toString("utf8").slice(0, 80) +
-                (rawBody.length > 160 ? " ... " + rawBody.toString("utf8").slice(-80) : "")
-                : null,
-        }));
-    }
 
     let payload;
     try {
@@ -331,6 +324,34 @@ const receiveWebhook = asyncHandler(async (req, res) => {
     }
 
     logger.info(`[whatsapp] Webhook received: object=${payload.object || "unknown"}`);
+
+    // Signature verification now keys off the TENANT's own Meta App Secret
+    // (stored on their IntegrationCredential), not a single platform-wide
+    // env var — every tenant brings their own Meta App. We look the
+    // credential up by the phone_number_id embedded in the payload itself.
+    const firstPhoneNumberId = extractFirstPhoneNumberId(payload);
+    let credentialForSignature = null;
+    if (firstPhoneNumberId) {
+        credentialForSignature = await IntegrationCredential.findOne({
+            channel: "whatsapp",
+            "whatsapp.phoneNumberId": firstPhoneNumberId,
+        });
+    }
+    const appSecret = credentialForSignature?.whatsapp?.appSecret || null;
+    const signatureValid = isValidSignature(rawBody, signatureHeader, appSecret);
+
+    if (!appSecret) {
+        logger.warn(
+            `[whatsapp] No App Secret on file for phoneNumberId=${firstPhoneNumberId || "unknown"} — accepting webhook WITHOUT signature verification. Add an App Secret to that WhatsApp credential before going to production.`
+        );
+    } else if (!signatureValid) {
+        // Logged but not rejected outright: Meta's retry/backoff behavior on a
+        // hard 4xx here can be more disruptive than accepting-and-flagging a
+        // handful of bad-signature events.
+        logger.warn(
+            `[whatsapp] Webhook signature verification FAILED for phoneNumberId=${firstPhoneNumberId || "unknown"} — storing event anyway, flagged as unverified`
+        );
+    }
 
     const entries = Array.isArray(payload.entry) ? payload.entry : [];
 

@@ -12,7 +12,7 @@ const SECRET_PATHS = {
     "email.api.accessKeyId",
     "email.api.secretAccessKey",
   ],
-  whatsapp: ["whatsapp.accessToken", "whatsapp.webhookVerifyToken"],
+  whatsapp: ["whatsapp.accessToken", "whatsapp.webhookVerifyToken", "whatsapp.appSecret"],
   sms: ["sms.apiKey", "sms.authToken", "sms.accessKeyId", "sms.secretAccessKey"],
   ai_provider: ["aiProvider.apiKey", "aiProvider.serviceAccountJson"],
 };
@@ -129,22 +129,34 @@ const createEmailApi = asyncHandler(async (req, res) => {
 // consent-screen flow — see controllers/oauth.controller.js.
 
 // POST /api/credentials/whatsapp
-// Only phoneNumber, phoneNumberId, wabaId and accessToken are ever
+// phoneNumber, phoneNumberId, wabaId, appId, appSecret and accessToken are
 // collected from the user — the webhook URL and verify token are fixed,
 // platform-wide values shown to them (see WHATSAPP_VERIFY_TOKEN), not
 // something they configure per number. Embedded signup will eventually
 // replace this manual form entirely.
+//
+// appSecret is required (not just appId): it's the tenant's own Meta App
+// Secret, used to verify the X-Hub-Signature-256 header on inbound
+// webhooks for THEIR number(s) — see whatsapp.controller.js. It's stored
+// encrypted (secretField on the model) and never sent back to the client.
 const createWhatsapp = asyncHandler(async (req, res) => {
-  const { label, isDefault, phoneNumber, phoneNumberId, wabaId, appId, accessToken } = req.body;
-  if (!phoneNumber?.trim() || !phoneNumberId?.trim() || !wabaId?.trim() || !accessToken?.trim()) {
-    throw new ApiError(400, "Phone number, Phone Number ID, WABA ID and access token are all required");
+  const { label, isDefault, phoneNumber, phoneNumberId, wabaId, appId, appSecret, accessToken } = req.body;
+  if (
+    !phoneNumber?.trim() ||
+    !phoneNumberId?.trim() ||
+    !wabaId?.trim() ||
+    !appId?.trim() ||
+    !appSecret?.trim() ||
+    !accessToken?.trim()
+  ) {
+    throw new ApiError(400, "Phone number, Phone Number ID, WABA ID, App ID, App Secret and access token are all required");
   }
   const cred = await credentialService.createCredential({
     userId: req.user._id,
     channel: "whatsapp",
     label,
     isDefault,
-    payload: { phoneNumber, phoneNumberId, wabaId, appId, accessToken },
+    payload: { phoneNumber, phoneNumberId, wabaId, appId, appSecret, accessToken },
   });
   res.status(201).json({ success: true, data: { credential: sanitizeCredential(cred) } });
 });
