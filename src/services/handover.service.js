@@ -77,7 +77,7 @@ const requestHandover = async (bot, sessionId) => {
         const conversation = await Conversation.findOneAndUpdate(
             { bot: bot._id, sessionId },
             {
-                $setOnInsert: { type: "widget", messages: [] },
+                $setOnInsert: { type: "widget" },
                 $set: { "handover.status": "offHours" },
                 $push: { messages: { role: "assistant", content: message, via: "ai" } },
             },
@@ -85,10 +85,6 @@ const requestHandover = async (bot, sessionId) => {
         );
 
         realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
-
-        // The widget shows this by re-fetching and rendering the new
-        // assistant message above — but a WhatsApp visitor has no such
-        // fetch loop, so it has to be pushed out over the Cloud API too.
         await relayToWhatsappIfNeeded(conversation, message);
 
         return {
@@ -107,11 +103,16 @@ const requestHandover = async (bot, sessionId) => {
         throw new ApiError(400, "No agents are available for this chat right now");
     }
 
+    const requestedMessage =
+        bot.agentConfig?.handoverRequestedMessage ||
+        "Got it — connecting you to one of our team members. Someone will join the chat shortly.";
+
     const conversation = await Conversation.findOneAndUpdate(
         { bot: bot._id, sessionId },
         {
-            $setOnInsert: { type: "widget", messages: [] },
+            $setOnInsert: { type: "widget" },
             $set: { "handover.status": "requested", "handover.requestedAt": new Date() },
+            $push: { messages: { role: "assistant", content: requestedMessage, via: "ai" } },
         },
         { upsert: true, new: true }
     );
@@ -124,16 +125,8 @@ const requestHandover = async (bot, sessionId) => {
         data: { botId: bot._id.toString(), conversationId: conversation._id.toString() },
     });
 
-    // Pushes to every currently-connected, eligible agent's dashboard stream —
-    // their pending list refetches immediately instead of on the next poll tick.
     realtimeService.publish(`bot-handovers:${bot._id}`, "update", { scope: "pending" });
 
-    // Same reasoning as the offHours branch above: the widget's own UI
-    // already communicates "waiting for an agent", a WhatsApp visitor needs
-    // an actual message telling them so.
-    const requestedMessage =
-        bot.agentConfig?.handoverRequestedMessage ||
-        "Got it — connecting you to one of our team members. Someone will join the chat shortly.";
     await relayToWhatsappIfNeeded(conversation, requestedMessage);
 
     return { conversation, offHours: false, message: requestedMessage };
@@ -281,23 +274,19 @@ const acceptHandover = async (agentId, conversationId) => {
         Agent.updateOne({ _id: agentId }, { $inc: { "performance.assignedCount": 1 } }),
     ]);
 
-    // Tell other agents' pending lists this chat is gone, tell the accepting
-    // agent's own dashboard to pick up their new assignment, and tell the
-    // visitor (if their stream is open) that someone joined.
+    const bot = await Bot.findById(conversation.bot).select("agentConfig");
+    const template =
+        bot?.agentConfig?.handoverConnectedMessage || "You're now connected with {agentName}. They'll be right with you.";
+    const message = template.replace("{agentName}", agent?.name || "an agent");
+
+    conversation.messages.push({ role: "assistant", content: message, via: "ai" });
+    await conversation.save();
+
     realtimeService.publish(`bot-handovers:${conversation.bot}`, "update", { scope: "pending" });
     realtimeService.publish(`agent-assigned:${agentId}`, "update", { scope: "assigned" });
     realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
 
-    // The widget picks this up from the realtime publish above (renders the
-    // agent's name/badge). A WhatsApp visitor can't see that, so tell them
-    // directly, same as the "waiting for an agent" message earlier.
-    if (conversation.type === "whatsapp") {
-        const bot = await Bot.findById(conversation.bot).select("agentConfig");
-        const template =
-            bot?.agentConfig?.handoverConnectedMessage || "You're now connected with {agentName}. They'll be right with you.";
-        const message = template.replace("{agentName}", agent?.name || "an agent");
-        await relayToWhatsappIfNeeded(conversation, message);
-    }
+    await relayToWhatsappIfNeeded(conversation, message);
 
     return conversation;
 };
@@ -350,7 +339,7 @@ const sendAgentMessage = async (agent, conversationId, message, options = {}) =>
     await conversation.save();
 
     if (cannedResponseId) {
-        CannedResponse.updateOne({ _id: cannedResponseId }, { $inc: { usageCount: 1 } }).catch(() => {});
+        CannedResponse.updateOne({ _id: cannedResponseId }, { $inc: { usageCount: 1 } }).catch(() => { });
     }
 
     realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
@@ -372,19 +361,21 @@ const resolveHandover = async (agentId, conversationId) => {
     conversation.handover.status = "resolved";
     conversation.handover.resolvedAt = new Date();
     conversation.handover.csat.promptedAt = new Date();
+
+    const bot = await Bot.findById(conversation.bot).select("agentConfig");
+    const message =
+        bot?.agentConfig?.handoverResolvedMessage ||
+        "This chat has been marked as resolved. Feel free to message us again anytime!";
+
+    conversation.messages.push({ role: "assistant", content: message, via: "ai" });
+
     await conversation.save();
     await Agent.updateOne({ _id: agentId }, { $inc: { "performance.resolvedCount": 1 } });
 
     realtimeService.publish(`agent-assigned:${agentId}`, "update", { scope: "assigned" });
     realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
 
-    if (conversation.type === "whatsapp") {
-        const bot = await Bot.findById(conversation.bot).select("agentConfig");
-        const message =
-            bot?.agentConfig?.handoverResolvedMessage ||
-            "This chat has been marked as resolved. Feel free to message us again anytime!";
-        await relayToWhatsappIfNeeded(conversation, message);
-    }
+    await relayToWhatsappIfNeeded(conversation, message);
 
     return conversation;
 };
