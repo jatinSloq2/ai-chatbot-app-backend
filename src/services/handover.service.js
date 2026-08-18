@@ -245,6 +245,14 @@ const pollUpdates = async (bot, sessionId, since) => {
 // allowed once per conversation, and only while status is "resolved" — a
 // visitor can't rate a chat that's still in progress or wasn't resolved by
 // an agent at all.
+//
+// Credit for the rating goes ONLY to whoever actually resolved the chat
+// (conversation.handover.assignedAgent at the time of resolution) — CSAT
+// measures how well a chat was closed out, not participation, so an
+// earlier agent in handover.history who was transferred off before
+// resolving it does NOT get any of the rating's points. Their entry in
+// history is still visible for context, it just doesn't carry a
+// csatRating — only the entry for whoever resolved it does (see below).
 const submitCsat = async (bot, sessionId, rating, comment) => {
     const conversation = await Conversation.findOne({ bot: bot._id, sessionId });
     if (!conversation) throw new ApiError(404, "Conversation not found");
@@ -261,17 +269,38 @@ const submitCsat = async (bot, sessionId, rating, comment) => {
     conversation.handover.csat.rating = rating;
     conversation.handover.csat.comment = comment || null;
     conversation.handover.csat.ratedAt = new Date();
+
+    const resolvingAgentId = conversation.handover.assignedAgent;
+
+    // Tag the history entry that actually resolved this chat — by the time
+    // CSAT is submitted, resolveHandover() has already closed it out with
+    // endReason:"resolved", so it's the resolving agent's entry with the
+    // most recent assignedAt (there's exactly one, never more).
+    if (resolvingAgentId) {
+        let latestResolvedIdx = -1;
+        conversation.handover.history.forEach((h, i) => {
+            if (h.endReason === "resolved" && h.agent?.toString() === resolvingAgentId.toString()) {
+                if (latestResolvedIdx === -1 || h.assignedAt > conversation.handover.history[latestResolvedIdx].assignedAt) {
+                    latestResolvedIdx = i;
+                }
+            }
+        });
+        if (latestResolvedIdx !== -1) {
+            conversation.handover.history[latestResolvedIdx].csatRating = rating;
+        }
+    }
+
     await conversation.save();
 
-    if (conversation.handover.assignedAgent) {
+    if (resolvingAgentId) {
         // Running sum/count on the agent — this is what powers the "CSAT"
         // column in the owner's Agents page and the agent's own ratings view,
         // without having to re-aggregate every conversation on every read.
         await Agent.updateOne(
-            { _id: conversation.handover.assignedAgent },
+            { _id: resolvingAgentId },
             { $inc: { "performance.csatSum": rating, "performance.csatCount": 1 } }
         );
-        realtimeService.publish(`agent-assigned:${conversation.handover.assignedAgent}`, "update", { scope: "assigned" });
+        realtimeService.publish(`agent-assigned:${resolvingAgentId}`, "update", { scope: "assigned" });
     }
 
     return conversation;
@@ -451,8 +480,19 @@ const transferHandover = async (fromAgentId, conversationId, toAgentId) => {
 // Deliberately NOT filtered by handover.status — a rated conversation stays
 // visible to the agent here forever, independent of whatever the pending/
 // assigned lists show (which only ever show "currently active" work).
+//
+// Matches on handover.history.agent, not handover.assignedAgent — a
+// conversation this agent handled and then got transferred away from
+// BEFORE it was resolved/rated would otherwise silently vanish from their
+// ratings view the moment the next agent took over (assignedAgent would
+// already point at someone else by the time the visitor actually rates
+// it). history keeps every agent who ever touched the chat, so this still
+// finds it.
 const listRatedForAgent = async (agentId, { limit = 50, skip = 0 } = {}) => {
-    return Conversation.find({ "handover.assignedAgent": agentId, "handover.csat.rating": { $ne: null } })
+    return Conversation.find({
+        $or: [{ "handover.assignedAgent": agentId }, { "handover.history.agent": agentId }],
+        "handover.csat.rating": { $ne: null },
+    })
         .sort({ "handover.csat.ratedAt": -1 })
         .skip(skip)
         .limit(limit)

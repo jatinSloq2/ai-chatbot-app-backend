@@ -132,6 +132,17 @@ const conversationSchema = new mongoose.Schema(
               enum: [null, "transferred", "resolved"],
               default: null,
             },
+            // Set only on the entry that actually resolved the chat, once
+            // the visitor rates it (see handover.service.js#submitCsat).
+            // Display-only — it's a copy of handover.csat.rating tagged
+            // onto the entry that earned it, purely so the history list
+            // shows "Agent B resolved this — rated 5★" instead of leaving
+            // it ambiguous which stint the rating belongs to. The actual
+            // CSAT points on Agent.performance are ONLY ever credited to
+            // whoever resolved the chat (this same agent), never to
+            // earlier agents in the chain — resolving well is what's being
+            // measured, not merely having touched the conversation.
+            csatRating: { type: Number, min: 1, max: 5, default: null },
           },
         ],
         default: [],
@@ -158,5 +169,9 @@ const conversationSchema = new mongoose.Schema(
 conversationSchema.index({ bot: 1, sessionId: 1 }, { unique: true });
 conversationSchema.index({ "handover.status": 1, "handover.requestedAt": 1 });
 conversationSchema.index({ "handover.assignedAgent": 1, "handover.status": 1 });
+// Backs listRatedForAgent's $or lookup — finding every conversation a given
+// agent EVER handled (not just the one they're currently assigned to),
+// filtered down to rated ones.
+conversationSchema.index({ "handover.history.agent": 1, "handover.csat.rating": 1 });
 
 module.exports = mongoose.model("Conversation", conversationSchema);
