@@ -193,6 +193,16 @@ const sanitizeConversation = (c) => ({
     assignedAt: c.handover.assignedAt,
     resolvedAt: c.handover.resolvedAt,
     csat: c.handover.csat,
+    // Every agent who has ever handled this conversation, oldest first —
+    // not just whoever is assigned right now. See Conversation.js's schema
+    // comment and handover.service.js#transferHandover.
+    history: (c.handover.history || []).map((h) => ({
+      agentId: h.agent,
+      agentName: h.agentName,
+      assignedAt: h.assignedAt,
+      endedAt: h.endedAt,
+      endReason: h.endReason,
+    })),
   },
   createdAt: c.createdAt,
   updatedAt: c.updatedAt,
@@ -300,6 +310,31 @@ const sendAgentMedia = asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data: { conversation: sanitizeConversation(updated) } });
 });
 
+// GET /api/agent-auth/conversations/:conversationId/transfer-candidates
+// Other agents on this conversation's bot the current agent could hand it
+// off to — powers the "Transfer to..." picker.
+const listTransferCandidates = asyncHandler(async (req, res) => {
+  const agents = await handoverService.listTransferCandidates(req.agent._id, req.params.conversationId);
+  res.status(200).json({
+    success: true,
+    data: {
+      agents: agents.map((a) => ({ id: a._id, name: a.name, email: a.email, avatar: a.avatar, status: a.status })),
+    },
+  });
+});
+
+// POST /api/agent-auth/conversations/:conversationId/transfer
+// body: { toAgentId }
+// Hands an active conversation off to another eligible agent mid-chat,
+// without losing track of who handled it before — see
+// handover.service.js#transferHandover.
+const transferHandover = asyncHandler(async (req, res) => {
+  const { toAgentId } = req.body;
+  if (!toAgentId) throw new ApiError(400, "toAgentId is required");
+  const conversation = await handoverService.transferHandover(req.agent._id, req.params.conversationId, toAgentId);
+  res.status(200).json({ success: true, data: { conversation: sanitizeConversation(conversation) } });
+});
+
 // GET /api/agent-auth/canned-responses?botId=...
 // Every canned response the agent's owner has defined that's usable here —
 // shared macros (bot: null) plus ones scoped to this specific bot.
@@ -383,6 +418,8 @@ module.exports = {
   getMyConversation,
   sendAgentMessage,
   sendAgentMedia,
+  listTransferCandidates,
+  transferHandover,
   listCannedResponses,
   sendCannedResponse,
   listMyRatings,

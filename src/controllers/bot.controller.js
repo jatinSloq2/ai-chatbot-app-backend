@@ -177,7 +177,18 @@ const setModelConfig = asyncHandler(async (req, res) => {
 // handover is offered at all. Ownership of every agent/team ID is verified
 // against req.user so a bot can't be pointed at someone else's agents.
 const setAgentConfig = asyncHandler(async (req, res) => {
-  const { assignEnabled, assignedAgents, assignedTeams, handoverMessageThreshold, offHoursMessage } = req.body;
+  const {
+    assignEnabled,
+    assignedAgents,
+    assignedTeams,
+    handoverMessageThreshold,
+    offHoursMessage,
+    handoverRequestedMessage,
+    handoverConnectedMessage,
+    handoverResolvedMessage,
+    csatPromptMessage,
+    csatThankYouMessage,
+  } = req.body;
 
   const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
   if (!bot) throw new ApiError(404, "Bot not found");
@@ -212,6 +223,24 @@ const setAgentConfig = asyncHandler(async (req, res) => {
 
   if (offHoursMessage !== undefined) {
     bot.agentConfig.offHoursMessage = offHoursMessage?.trim() || bot.agentConfig.offHoursMessage;
+  }
+  if (handoverRequestedMessage !== undefined) {
+    bot.agentConfig.handoverRequestedMessage =
+      handoverRequestedMessage?.trim() || bot.agentConfig.handoverRequestedMessage;
+  }
+  if (handoverConnectedMessage !== undefined) {
+    bot.agentConfig.handoverConnectedMessage =
+      handoverConnectedMessage?.trim() || bot.agentConfig.handoverConnectedMessage;
+  }
+  if (handoverResolvedMessage !== undefined) {
+    bot.agentConfig.handoverResolvedMessage =
+      handoverResolvedMessage?.trim() || bot.agentConfig.handoverResolvedMessage;
+  }
+  if (csatPromptMessage !== undefined) {
+    bot.agentConfig.csatPromptMessage = csatPromptMessage?.trim() || bot.agentConfig.csatPromptMessage;
+  }
+  if (csatThankYouMessage !== undefined) {
+    bot.agentConfig.csatThankYouMessage = csatThankYouMessage?.trim() || bot.agentConfig.csatThankYouMessage;
   }
 
   await bot.save();

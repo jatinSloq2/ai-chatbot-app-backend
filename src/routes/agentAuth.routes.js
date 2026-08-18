@@ -36,6 +36,8 @@ router.post(
   agentAuthController.sendAgentMedia
 );
 router.post("/conversations/:conversationId/resolve", agentAuthController.resolveConversation);
+router.get("/conversations/:conversationId/transfer-candidates", agentAuthController.listTransferCandidates);
+router.post("/conversations/:conversationId/transfer", agentAuthController.transferHandover);
 
 // Canned responses (saved replies / macros) usable in the agent panel.
 router.get("/canned-responses", agentAuthController.listCannedResponses);

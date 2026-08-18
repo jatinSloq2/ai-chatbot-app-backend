@@ -12,6 +12,7 @@ const botService = require("../services/bot.service");
 const handoverService = require("../services/handover.service");
 const analyticsService = require("../services/analytics.service");
 const whatsappSender = require("../services/whatsappSender.service");
+const storageService = require("../services/storage.service");
 const { getLanguageName } = require("../utils/i18n");
 const {
     looksLikeHandoverRequest,
@@ -105,14 +106,32 @@ const summarizeChange = (change) => {
     const status = value.statuses?.[0];
 
     if (message) {
+        // Meta puts inbound media (image/document/audio/video/sticker) IDs
+        // under a key that matches message.type — pull it out generically
+        // rather than a big if/else chain of message.image?.id, etc.
+        const mediaObj = ["image", "document", "audio", "video", "sticker"].includes(message.type)
+            ? message[message.type]
+            : null;
+
+        // A tap on our interactive "list" CSAT prompt (or any future
+        // button/list reply) lands here — never in message.text.
+        const interactiveReplyId =
+            message.interactive?.list_reply?.id || message.interactive?.button_reply?.id || null;
+        const interactiveReplyTitle =
+            message.interactive?.list_reply?.title || message.interactive?.button_reply?.title || null;
+
         return {
             kind: "message",
             phoneNumberId: value.metadata?.phone_number_id || null,
             from: message.from || null,
-            messageId: message.id || null, // <-- ADD THIS
+            messageId: message.id || null,
             messageType: message.type || null,
+            mediaId: mediaObj?.id || null,
+            mediaCaption: mediaObj?.caption || null,
+            interactiveReplyId,
             preview:
                 message.text?.body?.slice(0, 200) ||
+                interactiveReplyTitle ||
                 (message.type ? `[${message.type} message]` : null),
         };
     }
@@ -157,19 +176,12 @@ const triggerWhatsappHandover = async (bot, from) => {
     }
 };
 
-/**
- * Runs one inbound WhatsApp text message through the exact same brain the
- * widget uses — RAG retrieval + LLM completion, or straight into the
- * transcript untouched if a human agent is already handling this
- * conversation — then sends the result back out over the Cloud API. Mirrors
- * chat.controller.js#chat, minus the SSE token streaming (WhatsApp has no
- * concept of a partial message).
- *
- * Never throws — every failure path is caught, logged, and (best-effort)
- * turned into an apologetic reply to the sender, since this runs after the
- * webhook has already ack'd 200 and nothing is listening for a thrown error.
- */
-const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) => {
+// Shared by every inbound-message branch (text / media / interactive) —
+// resolves the tenant credential + bot for a given phoneNumberId, or null
+// if either lookup misses. Extracted so the media and interactive-reply
+// handlers below don't have to duplicate handleInboundMessage's original
+// lookup.
+const resolveBotForPhoneNumberId = async (phoneNumberId) => {
     const credential = await IntegrationCredential.findOne({
         channel: "whatsapp",
         "whatsapp.phoneNumberId": phoneNumberId,
@@ -177,7 +189,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) =>
     });
     if (!credential) {
         logger.warn(`[whatsapp] No active credential found for phoneNumberId=${phoneNumberId} — dropping message`);
-        return;
+        return null;
     }
 
     const bot = await Bot.findOne({
@@ -187,13 +199,163 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) =>
     });
     if (!bot) {
         logger.warn(`[whatsapp] phoneNumberId=${phoneNumberId} isn't connected to an enabled bot — dropping message`);
+        return null;
+    }
+
+    return { credential, bot };
+};
+
+const findOrCreateWhatsappConversation = async (bot, from) => {
+    // sessionId IS the sender's WhatsApp number — one conversation per
+    // (bot, phone number) pair, same way sessionId is one per (bot,
+    // browser) pair on the widget.
+    let conversation = await Conversation.findOne({ bot: bot._id, sessionId: from });
+    if (!conversation) {
+        conversation = await Conversation.create({
+            bot: bot._id,
+            sessionId: from,
+            type: "whatsapp",
+            visitor: { phone: from, phoneVerified: true },
+            messages: [],
+        });
+    }
+    return conversation;
+};
+
+/**
+ * A visitor tapped a row on our interactive "rate 1-5" CSAT list (sent by
+ * handoverService.resolveHandover once an agent marks a WhatsApp chat
+ * resolved — see handover.service.js#sendWhatsappCsatPrompt). Row ids are
+ * "csat_<1-5>"; anything else is an interactive reply we don't recognise
+ * (future button/list features) and is just logged.
+ */
+const handleInboundInteractive = async ({ phoneNumberId, from, replyId }) => {
+    const resolved = await resolveBotForPhoneNumberId(phoneNumberId);
+    if (!resolved) return;
+    const { credential, bot } = resolved;
+
+    const match = /^csat_([1-5])$/.exec(replyId || "");
+    if (!match) {
+        logger.info(`[whatsapp] Unrecognised interactive reply "${replyId}" from ${from} — ignoring`);
+        return;
+    }
+    const rating = Number(match[1]);
+
+    try {
+        await handoverService.submitCsat(bot, from, rating, null);
+    } catch (err) {
+        // Most likely: already rated, or the chat isn't "resolved" anymore
+        // (visitor tapped a stale list from an earlier resolved chat) —
+        // either way, nothing actionable to send back.
+        logger.warn(`[whatsapp] CSAT submit from ${from} on bot ${bot._id} failed: ${err.message}`);
         return;
     }
 
+    const thankYou = bot.agentConfig?.csatThankYouMessage || "Thanks for the feedback!";
+    try {
+        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: thankYou });
+    } catch (err) {
+        logger.error(`[whatsapp] Failed to send CSAT thank-you to ${from}: ${err.message}`);
+    }
+};
+
+/**
+ * A visitor sent an image/document/audio/video/sticker. Downloads the bytes
+ * from Meta, stores them the same way agent/visitor widget uploads are
+ * stored (storage.service.js#saveMedia), and appends a media message to the
+ * conversation — routed the same way a text message would be: straight into
+ * the transcript while a human is already handling the chat, otherwise
+ * acknowledged (and, if a caption was attached, handed to the AI as if it
+ * were a normal text question).
+ */
+const handleInboundMedia = async ({ phoneNumberId, from, mediaId, mediaType, caption }) => {
+    const resolved = await resolveBotForPhoneNumberId(phoneNumberId);
+    if (!resolved) return;
+    const { credential, bot } = resolved;
+
+    const conversation = await findOrCreateWhatsappConversation(bot, from);
+
+    let media;
+    try {
+        const file = await whatsappSender.downloadWhatsappMedia(credential.whatsapp, mediaId);
+        media = await storageService.saveMedia({
+            ownerId: bot.user,
+            botId: bot._id,
+            actorType: "visitor",
+            actorId: conversation._id,
+            file,
+        });
+    } catch (err) {
+        logger.error(`[whatsapp] Failed to download/store media ${mediaId} from ${from}: ${err.message}`);
+        try {
+            await whatsappSender.sendWhatsappText(credential.whatsapp, {
+                to: from,
+                message: "I couldn't download that attachment — mind resending it?",
+            });
+        } catch (sendErr) {
+            logger.error(`[whatsapp] Also failed to notify ${from} of the download failure: ${sendErr.message}`);
+        }
+        return;
+    }
+
+    if (conversation.handover.status === "requested" || conversation.handover.status === "assigned") {
+        // A human is already on this chat — same as a text message in that
+        // state, this goes straight into the transcript for the agent to
+        // see, no AI involved.
+        await handoverService.appendVisitorMedia(conversation, media, caption || "");
+        return;
+    }
+
+    // AI mode: the message is saved either way so the attachment is never
+    // lost, but the AI pipeline itself only understands text — if a caption
+    // came with the media, treat it as the visitor's actual question and
+    // run it through the normal pipeline; otherwise just acknowledge receipt.
+    conversation.messages.push({
+        role: "user",
+        content: caption || "",
+        contentType: media.kind,
+        media,
+    });
+    await conversation.save();
+
+    if (caption?.trim()) {
+        await handleInboundMessage({ phoneNumberId, from, messageId: null, text: caption.trim(), skipUserSave: true });
+        return;
+    }
+
+    try {
+        await whatsappSender.sendWhatsappText(credential.whatsapp, {
+            to: from,
+            message: `Got your ${mediaType || "file"} — let me know if you have a question about it!`,
+        });
+    } catch (err) {
+        logger.error(`[whatsapp] Failed to send media-received ack to ${from}: ${err.message}`);
+    }
+};
+
+/**
+ * Runs one inbound WhatsApp text message through the exact same brain the
+ * widget uses — RAG retrieval + LLM completion, or straight into the
+ * transcript untouched if a human agent is already handling this
+ * conversation — then sends the result back out over the Cloud API. Mirrors
+ * chat.controller.js#chat, minus the SSE token streaming (WhatsApp has no
+ * concept of a partial message).
+ *
+ * `skipUserSave` is set when handleInboundMedia already pushed this exact
+ * text (as a media message's caption) onto the transcript — avoids saving
+ * the visitor's message twice.
+ *
+ * Never throws — every failure path is caught, logged, and (best-effort)
+ * turned into an apologetic reply to the sender, since this runs after the
+ * webhook has already ack'd 200 and nothing is listening for a thrown error.
+ */
+const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skipUserSave = false }) => {
+    const resolved = await resolveBotForPhoneNumberId(phoneNumberId);
+    if (!resolved) return;
+    const { credential, bot } = resolved;
+
     if (!text) {
-        // Non-text message (image/audio/location/etc.) — the AI pipeline only
-        // understands text today. Tell the sender rather than silently
-        // dropping their message.
+        // Non-text, non-media message (location/contacts/unsupported, etc.)
         try {
             await whatsappSender.sendWhatsappText(credential.whatsapp, {
                 to: from,
@@ -205,9 +367,6 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) =>
         return;
     }
 
-    // sessionId IS the sender's WhatsApp number — one conversation per
-    // (bot, phone number) pair, same way sessionId is one per (bot,
-    // browser) pair on the widget.
     let conversation = await Conversation.findOne({ bot: bot._id, sessionId: from });
     if (!conversation) {
         conversation = await Conversation.create({
@@ -314,7 +473,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) =>
         // above) that the visitor wants a human — start the same handover
         // flow instead of sending the raw sentinel text back to them.
         if (isHandoverSentinelResponse(fullResponse)) {
-            conversation.messages.push({ role: "user", content: text });
+            if (!skipUserSave) conversation.messages.push({ role: "user", content: text });
             await conversation.save();
 
             const handoverStarted = await triggerWhatsappHandover(bot, from);
@@ -338,7 +497,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text }) =>
             return;
         }
 
-        conversation.messages.push({ role: "user", content: text });
+        if (!skipUserSave) conversation.messages.push({ role: "user", content: text });
         conversation.messages.push({ role: "assistant", content: fullResponse });
         await conversation.save();
 
@@ -477,19 +636,38 @@ const receiveWebhook = asyncHandler(async (req, res) => {
             }
 
             if (summary.kind === "message" && summary.phoneNumberId && summary.from) {
-                const messageBody = change?.value?.messages?.[0]?.text?.body?.trim() || null;
+                const inboundMessage = change?.value?.messages?.[0] || {};
                 try {
-                    await handleInboundMessage({
-                        phoneNumberId: summary.phoneNumberId,
-                        from: summary.from,
-                        messageId: summary.messageId, // NEW
-                        text: messageBody,
-                    });
+                    if (summary.interactiveReplyId) {
+                        // A tap on the CSAT list (or any future interactive
+                        // reply) — never routed through the AI/media pipeline.
+                        await handleInboundInteractive({
+                            phoneNumberId: summary.phoneNumberId,
+                            from: summary.from,
+                            replyId: summary.interactiveReplyId,
+                        });
+                    } else if (summary.mediaId) {
+                        await handleInboundMedia({
+                            phoneNumberId: summary.phoneNumberId,
+                            from: summary.from,
+                            mediaId: summary.mediaId,
+                            mediaType: summary.messageType,
+                            caption: summary.mediaCaption,
+                        });
+                    } else {
+                        const messageBody = inboundMessage.text?.body?.trim() || null;
+                        await handleInboundMessage({
+                            phoneNumberId: summary.phoneNumberId,
+                            from: summary.from,
+                            messageId: summary.messageId,
+                            text: messageBody,
+                        });
+                    }
                     if (eventDoc) await WhatsAppEvent.updateOne({ _id: eventDoc._id }, { $set: { processed: true } });
                 } catch (err) {
-                    // handleInboundMessage already catches and logs its own
+                    // Every handler above already catches and logs its own
                     // pipeline errors — this only catches something escaping
-                    // that (e.g. a DB lookup failure before the try/catch).
+                    // that (e.g. a DB lookup failure before its own try/catch).
                     logger.error(`[whatsapp] Unhandled error processing message from ${summary.from}: ${err.message}`);
                 }
             }

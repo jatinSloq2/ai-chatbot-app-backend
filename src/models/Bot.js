@@ -191,6 +191,20 @@ const botSchema = new mongoose.Schema(
         type: String,
         default: "This chat has been marked as resolved. Feel free to message us again anytime!",
       },
+      // --- CSAT (WhatsApp only — the widget has its own in-UI star picker) ---
+      // Sent as the body text of the interactive "rate 1-5" list message
+      // right after an agent resolves a WhatsApp conversation. {agentName}
+      // is replaced with the agent who resolved the chat, same as
+      // handoverConnectedMessage above.
+      csatPromptMessage: {
+        type: String,
+        default: "How was your chat with {agentName}? Tap below to rate it.",
+      },
+      // Sent once the visitor taps a rating in that list.
+      csatThankYouMessage: {
+        type: String,
+        default: "Thanks for the feedback! Let us know if there's anything else we can help with.",
+      },
     },
 
     // --- Business hours (human handover) ---

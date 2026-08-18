@@ -11,6 +11,18 @@ const whatsappSender = require("./whatsappSender.service");
 const logger = require("../utils/logger");
 const { isWithinBusinessHours, describeBusinessHours } = require("./businessHours.service");
 
+// Looks up the active WhatsApp credential for a bot, or null if this bot
+// isn't WhatsApp-connected / the credential is missing. Shared by every
+// relay/prompt helper below so there's one place that knows how to go from
+// "a conversation" to "the Cloud API creds to send on it".
+const getWhatsappCredential = async (botId) => {
+    const bot = await Bot.findById(botId).select("whatsappConfig");
+    const credentialId = bot?.whatsappConfig?.credentialId;
+    if (!credentialId) return null;
+    const credential = await IntegrationCredential.findOne({ _id: credentialId, channel: "whatsapp", isActive: true });
+    return credential || null;
+};
+
 // A conversation with type:"whatsapp" has no SSE/poll listener on the other
 // end — the visitor's only "client" is WhatsApp itself. So whenever an
 // agent (or the AI, via appendVisitorMessage's counterpart) writes an
@@ -18,17 +30,53 @@ const { isWithinBusinessHours, describeBusinessHours } = require("./businessHour
 // the Cloud API, or the visitor never sees it. Best-effort: a delivery
 // failure here shouldn't roll back a message that's already saved and
 // visible in the agent's dashboard.
-const relayToWhatsappIfNeeded = async (conversation, text) => {
-    if (conversation.type !== "whatsapp" || !text?.trim()) return;
+//
+// `media`, when present, is sent as a proper WhatsApp media message
+// (image/document/audio/video) with `text` as its caption, instead of a
+// plain text message — this is what makes an agent's file/image attachment
+// actually reach a WhatsApp visitor rather than silently only showing up in
+// the dashboard.
+const relayToWhatsappIfNeeded = async (conversation, text, media = null) => {
+    if (conversation.type !== "whatsapp") return;
+    if (!text?.trim() && !media) return;
     try {
-        const bot = await Bot.findById(conversation.bot).select("whatsappConfig");
-        const credentialId = bot?.whatsappConfig?.credentialId;
-        if (!credentialId) return;
-        const credential = await IntegrationCredential.findOne({ _id: credentialId, channel: "whatsapp", isActive: true });
+        const credential = await getWhatsappCredential(conversation.bot);
         if (!credential) return;
-        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: conversation.sessionId, message: text });
+        if (media) {
+            await whatsappSender.sendWhatsappMedia(credential.whatsapp, {
+                to: conversation.sessionId,
+                media,
+                caption: text,
+            });
+        } else {
+            await whatsappSender.sendWhatsappText(credential.whatsapp, { to: conversation.sessionId, message: text });
+        }
     } catch (err) {
         logger.error(`[whatsapp] Failed to relay agent reply for conversation ${conversation._id}: ${err.message}`);
+    }
+};
+
+// Sends the post-resolution CSAT prompt as a WhatsApp interactive list
+// (rating 1-5) instead of a plain text message. Best-effort, same as
+// relayToWhatsappIfNeeded — a delivery failure here shouldn't roll back the
+// resolution itself.
+const sendWhatsappCsatPrompt = async (conversation, bodyText) => {
+    if (conversation.type !== "whatsapp") return;
+    try {
+        const credential = await getWhatsappCredential(conversation.bot);
+        if (!credential) return;
+        await whatsappSender.sendWhatsappList(credential.whatsapp, {
+            to: conversation.sessionId,
+            bodyText,
+            buttonText: "Rate now",
+            sectionTitle: "How did we do?",
+            rows: [5, 4, 3, 2, 1].map((n) => ({
+                id: `csat_${n}`,
+                title: `${"⭐".repeat(n)} (${n}/5)`,
+            })),
+        });
+    } catch (err) {
+        logger.error(`[whatsapp] Failed to send CSAT prompt for conversation ${conversation._id}: ${err.message}`);
     }
 };
 
@@ -253,6 +301,10 @@ const listAssignedToAgent = async (agentId) => {
 const acceptHandover = async (agentId, conversationId) => {
     const botIds = await eligibleBotIds(agentId);
 
+    const [agent] = await Promise.all([
+        Agent.findById(agentId).select("name"),
+    ]);
+
     const conversation = await Conversation.findOneAndUpdate(
         { _id: conversationId, bot: { $in: botIds }, "handover.status": "requested" },
         {
@@ -260,6 +312,18 @@ const acceptHandover = async (agentId, conversationId) => {
                 "handover.status": "assigned",
                 "handover.assignedAgent": agentId,
                 "handover.assignedAt": new Date(),
+            },
+            // Opens this agent's entry in the assignment-history log — see
+            // the schema comment on Conversation.handover.history. This is
+            // the FIRST assignment on a fresh "requested" chat, so there's
+            // nothing to close out first (transferHandover is what closes
+            // an existing open entry before pushing a new one).
+            $push: {
+                history: {
+                    agent: agentId,
+                    agentName: agent?.name || null,
+                    assignedAt: new Date(),
+                },
             },
         },
         { new: true }
@@ -269,10 +333,7 @@ const acceptHandover = async (agentId, conversationId) => {
         throw new ApiError(409, "This chat was already taken by another agent, or is no longer waiting");
     }
 
-    const [agent] = await Promise.all([
-        Agent.findById(agentId).select("name"),
-        Agent.updateOne({ _id: agentId }, { $inc: { "performance.assignedCount": 1 } }),
-    ]);
+    await Agent.updateOne({ _id: agentId }, { $inc: { "performance.assignedCount": 1 } });
 
     const bot = await Bot.findById(conversation.bot).select("agentConfig");
     const template =
@@ -297,6 +358,92 @@ const getMyConversation = async (agentId, conversationId) => {
         "handover.assignedAgent": agentId,
     }).populate("bot", "name");
     if (!conversation) throw new ApiError(404, "Conversation not found");
+    return conversation;
+};
+
+// Other agents this bot could hand the conversation off to — eligible
+// agents on the bot (directly assigned or via an assigned team), minus the
+// one requesting the transfer and minus deactivated agents. Powers the
+// "Transfer to..." picker in the agent panel.
+const listTransferCandidates = async (agentId, conversationId) => {
+    const conversation = await getMyConversation(agentId, conversationId);
+    const bot = await Bot.findById(conversation.bot).select("assignedAgents assignedTeams");
+    if (!bot) return [];
+
+    const teams = await Team.find({ _id: { $in: bot.assignedTeams } }).select("members");
+    const teamAgentIds = teams.flatMap((t) => t.members.map((m) => m.toString()));
+    const candidateIds = Array.from(
+        new Set([...bot.assignedAgents.map((a) => a.toString()), ...teamAgentIds])
+    ).filter((id) => id !== agentId.toString());
+
+    return Agent.find({ _id: { $in: candidateIds }, isActive: true }).select("name email avatar status");
+};
+
+// Hands an already-assigned conversation from the current agent to another
+// eligible agent, mid-conversation — this is the "multiple agents in one
+// conversation" flow: rather than overwriting handover.assignedAgent and
+// losing track of who else touched the chat, the outgoing agent's
+// assignment-history entry is closed out (endReason:"transferred") and a
+// fresh entry is opened for the incoming agent, so the full chain of
+// agents who handled this conversation is always reconstructable from
+// handover.history — not just whoever is assigned right now.
+const transferHandover = async (fromAgentId, conversationId, toAgentId) => {
+    if (String(fromAgentId) === String(toAgentId)) {
+        throw new ApiError(400, "Can't transfer a conversation to yourself");
+    }
+
+    const conversation = await getMyConversation(fromAgentId, conversationId);
+    if (conversation.handover.status !== "assigned") {
+        throw new ApiError(400, "This conversation is no longer active");
+    }
+
+    const bot = await Bot.findById(conversation.bot).select("name assignedAgents assignedTeams agentConfig");
+    const candidates = await listTransferCandidates(fromAgentId, conversationId);
+    if (!candidates.some((c) => c._id.toString() === String(toAgentId))) {
+        throw new ApiError(400, "That agent isn't eligible for this bot");
+    }
+
+    const [fromAgent, toAgent] = await Promise.all([
+        Agent.findById(fromAgentId).select("name"),
+        Agent.findById(toAgentId).select("name"),
+    ]);
+
+    const now = new Date();
+
+    // Close the outgoing agent's open history entry (the one with no
+    // endedAt yet) and open a fresh one for the incoming agent.
+    conversation.handover.history = conversation.handover.history.map((h) =>
+        !h.endedAt && h.agent.toString() === String(fromAgentId)
+            ? { ...(h.toObject ? h.toObject() : h), endedAt: now, endReason: "transferred" }
+            : h
+    );
+    conversation.handover.history.push({ agent: toAgentId, agentName: toAgent?.name || null, assignedAt: now });
+    conversation.handover.assignedAgent = toAgentId;
+    conversation.handover.assignedAt = now;
+
+    const message = `${fromAgent?.name || "The agent"} transferred this chat to ${toAgent?.name || "another agent"}.`;
+    conversation.messages.push({ role: "assistant", content: message, via: "ai" });
+
+    await conversation.save();
+
+    await Promise.all([
+        Agent.updateOne({ _id: fromAgentId }, { $inc: { "performance.reassignedCount": 1 } }),
+        Agent.updateOne({ _id: toAgentId }, { $inc: { "performance.assignedCount": 1 } }),
+        notificationService.notifyAgents({
+            agentIds: [toAgentId.toString()],
+            type: "handover_request",
+            title: "A conversation was transferred to you",
+            body: `${fromAgent?.name || "An agent"} handed off a chat on ${bot?.name || "a bot"}.`,
+            data: { botId: conversation.bot.toString(), conversationId: conversation._id.toString() },
+        }),
+    ]);
+
+    realtimeService.publish(`agent-assigned:${fromAgentId}`, "update", { scope: "assigned" });
+    realtimeService.publish(`agent-assigned:${toAgentId}`, "update", { scope: "assigned" });
+    realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+
+    await relayToWhatsappIfNeeded(conversation, message);
+
     return conversation;
 };
 
@@ -346,23 +493,41 @@ const sendAgentMessage = async (agent, conversationId, message, options = {}) =>
 
     // Fire-and-forget: WhatsApp conversations have no realtime listener on
     // the visitor's end, so this is the only way the agent's reply actually
-    // reaches them. Widget messages already reach the visitor via the
-    // realtime publish above and don't need this.
-    relayToWhatsappIfNeeded(conversation, message).catch(() => { });
+    // reaches them (now including media — see relayToWhatsappIfNeeded).
+    // Widget messages already reach the visitor via the realtime publish
+    // above and don't need this.
+    relayToWhatsappIfNeeded(conversation, message, media || null).catch(() => { });
 
     return conversation;
 };
 
-// Marks the conversation resolved and arms the CSAT prompt — the widget
-// shows a "rate this chat" prompt the next time it polls and sees
-// status:"resolved" with no rating yet.
+// Marks the conversation resolved and arms the CSAT prompt. On the widget
+// this just flips a flag the widget polls for and shows its own in-UI star
+// picker. On WhatsApp there's no such UI, so this also pushes out an
+// interactive "rate 1-5" list message right after the resolved-chat text —
+// the visitor's tap on a row is what actually records the rating (see
+// whatsapp.controller.js's interactive/list_reply handling).
 const resolveHandover = async (agentId, conversationId) => {
     const conversation = await getMyConversation(agentId, conversationId);
     conversation.handover.status = "resolved";
     conversation.handover.resolvedAt = new Date();
     conversation.handover.csat.promptedAt = new Date();
 
-    const bot = await Bot.findById(conversation.bot).select("agentConfig");
+    // Close out this agent's open history entry — same bookkeeping
+    // transferHandover does, just with endReason:"resolved" instead of
+    // "transferred". Keeps handover.history a complete, gap-free record of
+    // every agent who ever worked this conversation.
+    conversation.handover.history = conversation.handover.history.map((h) =>
+        !h.endedAt && h.agent.toString() === String(agentId)
+            ? { ...(h.toObject ? h.toObject() : h), endedAt: conversation.handover.resolvedAt, endReason: "resolved" }
+            : h
+    );
+
+    const [agent, bot] = await Promise.all([
+        Agent.findById(agentId).select("name"),
+        Bot.findById(conversation.bot).select("agentConfig"),
+    ]);
+
     const message =
         bot?.agentConfig?.handoverResolvedMessage ||
         "This chat has been marked as resolved. Feel free to message us again anytime!";
@@ -376,6 +541,12 @@ const resolveHandover = async (agentId, conversationId) => {
     realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
 
     await relayToWhatsappIfNeeded(conversation, message);
+
+    if (conversation.type === "whatsapp") {
+        const promptTemplate =
+            bot?.agentConfig?.csatPromptMessage || "How was your chat with {agentName}? Tap below to rate it.";
+        await sendWhatsappCsatPrompt(conversation, promptTemplate.replace("{agentName}", agent?.name || "our team"));
+    }
 
     return conversation;
 };
@@ -394,4 +565,6 @@ module.exports = {
     listRatedForAgent,
     sendAgentMessage,
     resolveHandover,
+    listTransferCandidates,
+    transferHandover,
 };

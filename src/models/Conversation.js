@@ -103,14 +103,47 @@ const conversationSchema = new mongoose.Schema(
         enum: ["none", "requested", "assigned", "resolved", "offHours"],
         default: "none",
       },
+      // Whoever is CURRENTLY handling this conversation (null once
+      // resolved/unassigned). Kept for all the existing queries/indexes
+      // that filter "my active chats" by this field — `history` below is
+      // what makes every agent who has EVER touched this conversation
+      // visible, not just the latest one.
       assignedAgent: { type: mongoose.Schema.Types.ObjectId, ref: "Agent", default: null },
       requestedAt: { type: Date, default: null },
       assignedAt: { type: Date, default: null },
       resolvedAt: { type: Date, default: null },
 
+      // --- Assignment history (every agent who has handled this chat) ---
+      // One entry per assignment period. A conversation that's accepted,
+      // then transferred, then resolved ends up with 2 entries: the first
+      // agent's (endReason:"transferred") and the second agent's
+      // (endReason:"resolved"). `endedAt`/`endReason` are null while an
+      // entry is the CURRENT (still-active) assignment.
+      history: {
+        type: [
+          {
+            _id: false,
+            agent: { type: mongoose.Schema.Types.ObjectId, ref: "Agent", required: true },
+            agentName: { type: String, default: null }, // snapshot, survives agent deletion
+            assignedAt: { type: Date, default: Date.now },
+            endedAt: { type: Date, default: null },
+            endReason: {
+              type: String,
+              enum: [null, "transferred", "resolved"],
+              default: null,
+            },
+          },
+        ],
+        default: [],
+      },
+
       // --- CSAT (post-resolution rating) ---
       // Prompted once, right after an agent marks the chat resolved. `null`
-      // rating means "prompted but not yet answered (or skipped)".
+      // rating means "prompted but not yet answered (or skipped)". For
+      // type:"whatsapp" conversations the "prompt" is an interactive list
+      // message (see handover.service.js#resolveHandover /
+      // whatsapp.controller.js's list_reply handling) instead of the
+      // widget's in-UI star picker, but it's stored the exact same way.
       csat: {
         promptedAt: { type: Date, default: null },
         rating: { type: Number, min: 1, max: 5, default: null },
