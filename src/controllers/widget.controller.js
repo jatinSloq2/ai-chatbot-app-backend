@@ -1184,12 +1184,13 @@ function continueChat(pickedSessionId) {
       }
       if (data.status === "assigned") {
         showAttachButton();
-        // A conversation can be resolved+rated, then reopened and
-        // reassigned later (visitor asks for a human again) — each
-        // resolution gets its own CSAT prompt (see
-        // handover.service.js#resolveHandover), so let this session show
-        // the star picker again for the new cycle instead of silently
-        // staying suppressed from the first one.
+        // A conversation can be resolved+rated, reopened, and assigned
+        // again — possibly to the very same agent as before. That new
+        // assignment is a distinct interaction, not a continuation of the
+        // one that was already rated, so it earns its own independent CSAT
+        // prompt once it resolves (see handover.service.js#resolveHandover).
+        // Let this browser session show the star picker again for it
+        // instead of staying suppressed because of the earlier rating.
         csatShown = false;
       }
       if (data.status === "resolved") {

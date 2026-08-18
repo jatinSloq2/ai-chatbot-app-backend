@@ -272,10 +272,14 @@ const submitCsat = async (bot, sessionId, rating, comment) => {
 
     const resolvingAgentId = conversation.handover.assignedAgent;
 
-    // Tag the history entry that actually resolved this chat — by the time
-    // CSAT is submitted, resolveHandover() has already closed it out with
-    // endReason:"resolved", so it's the resolving agent's entry with the
-    // most recent assignedAt (there's exactly one, never more).
+    // Tag the specific history entry this rating belongs to — the stint
+    // that just resolved and prompted for it, NOT "the entry for this
+    // agent" in general. An agent can have several separate stints on the
+    // same conversation (reassigned back to them later), each with its own
+    // independent rating, so we pick the resolved entry with the latest
+    // assignedAt for the resolving agent — there's exactly one candidate
+    // at submission time, never more, because resolveHandover() closes out
+    // exactly one open entry per resolution.
     if (resolvingAgentId) {
         let latestResolvedIdx = -1;
         conversation.handover.history.forEach((h, i) => {
@@ -592,17 +596,21 @@ const resolveHandover = async (agentId, conversationId) => {
     conversation.handover.status = "resolved";
     conversation.handover.resolvedAt = new Date();
 
-    // Arm a FRESH CSAT prompt for this resolution. A conversation can be
-    // resolved, rated, then reopened (visitor asks for a human again) and
-    // reassigned/resolved again — most commonly on WhatsApp, where the
-    // same phone number can restart a handover any time. Each resolution
-    // is its own opportunity to be rated, so the top-level csat object is
-    // reset here rather than only having its promptedAt bumped — otherwise
-    // a rating left over from a previous resolution cycle would
-    // permanently block submitCsat's "already rated" guard from ever
-    // firing again for this conversation. The per-cycle rating itself
-    // isn't lost: submitCsat tags the specific handover.history entry that
-    // earned it (see below), so every past rating stays visible there.
+    // Arm a fresh CSAT prompt for THIS resolution. A conversation can be
+    // resolved, rated, reopened (visitor asks for a human again), and
+    // resolved a second (or third...) time — most commonly on WhatsApp,
+    // where the same phone number can restart a handover any time — and
+    // that can land on the SAME agent as before, not just a different one.
+    // Either way, each resolution is a distinct interaction and earns its
+    // own independent rating; it is never a correction/redo of an earlier
+    // one. So the top-level csat object is reset here (not just its
+    // promptedAt bumped) — otherwise a rating left over from a previous
+    // cycle would permanently block submitCsat's "already rated" guard
+    // from ever firing again for this conversation. No rating is lost by
+    // doing this: submitCsat tags the specific handover.history entry that
+    // earned it (see below), so every past rating for every past stint —
+    // including repeats with the same agent — stays visible there,
+    // untouched.
     conversation.handover.csat = {
       promptedAt: new Date(),
       rating: null,
