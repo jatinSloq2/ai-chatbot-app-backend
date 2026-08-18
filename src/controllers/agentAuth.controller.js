@@ -110,6 +110,30 @@ const getMe = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { agent: sanitizeAgent(req.agent) } });
 });
 
+// POST /api/agent-auth/me/avatar  (multipart "file")
+// Lets an agent set their own profile picture from the agent panel by
+// uploading an image, instead of the owner having to paste in a URL for
+// them. Same VPS/Cloudinary storage backend as everything else.
+const uploadMyAvatar = asyncHandler(async (req, res) => {
+  if (!req.file) throw new ApiError(400, "file is required");
+
+  const previousAvatar = req.agent.avatar;
+  const media = await storageService.saveAvatar({
+    actorType: "agent",
+    actorId: req.agent._id,
+    file: req.file,
+  });
+
+  req.agent.avatar = media.url;
+  await req.agent.save();
+
+  if (previousAvatar && previousAvatar.startsWith(storageService.PUBLIC_PREFIX)) {
+    storageService.deleteMedia({ provider: "vps", url: previousAvatar }).catch(() => {});
+  }
+
+  res.status(200).json({ success: true, message: "Profile picture updated", data: { agent: sanitizeAgent(req.agent) } });
+});
+
 // PATCH /api/agent-auth/status  body: { status: "online"|"offline"|"busy"|"away" }
 // Manual override for the agent (e.g. stepping away). Login/logout already
 // set online/offline automatically — this is for busy/away, or for an agent
@@ -202,7 +226,16 @@ const sanitizeConversation = (c) => ({
       assignedAt: h.assignedAt,
       endedAt: h.endedAt,
       endReason: h.endReason,
+      // The rating earned by THIS stint specifically (only set on the
+      // entry that actually resolved the chat and got rated) — was
+      // previously dropped here, which meant the agent panel couldn't ever
+      // show "you handled this and got 5★" the way the owner dashboard can.
+      csatRating: h.csatRating || null,
     })),
+    // Per-agent rollup — how many separate times each agent was assigned
+    // here and what they were rated across those stints. See
+    // handover.service.js#summarizeHandoverAgents.
+    agentSummary: handoverService.summarizeHandoverAgents(c.handover.history || []),
   },
   createdAt: c.createdAt,
   updatedAt: c.updatedAt,
@@ -405,6 +438,7 @@ module.exports = {
   refreshToken,
   logout,
   getMe,
+  uploadMyAvatar,
   setStatus,
   registerFcmToken,
   removeFcmToken,

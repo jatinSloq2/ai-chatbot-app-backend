@@ -6,6 +6,7 @@ const conversationController = require("../controllers/conversation.controller")
 const chatController = require("../controllers/chat.controller");
 const analyticsController = require("../controllers/analytics.controller");
 const { protect } = require("../middlewares/auth.middleware");
+const { avatarUpload } = require("../middlewares/upload.middleware");
 
 router.use(protect);
 
@@ -13,6 +14,7 @@ router.post("/", botController.createBot);
 router.get("/", botController.listBots);
 router.get("/:id", botController.getBot);
 router.patch("/:id", botController.updateBot);
+router.post("/:id/avatar", avatarUpload.single("file"), botController.uploadWidgetAvatar);
 router.delete("/:id", botController.deleteBot);
 router.post("/:id/regenerate-key", botController.regenerateKey);
 router.post("/:id/model-config", botController.setModelConfig);

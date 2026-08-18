@@ -3,6 +3,7 @@ const ApiError = require("../utils/ApiError");
 const Bot = require("../models/Bot");
 const Document = require("../models/Document");
 const botService = require("../services/bot.service");
+const storageService = require("../services/storage.service");
 
 const sanitizeBot = (bot) => ({
   id: bot._id,
@@ -128,6 +129,32 @@ const updateBot = asyncHandler(async (req, res) => {
 
   await bot.save();
   res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
+});
+
+// POST /api/bots/:id/avatar  (multipart "file")
+// Uploads a widget avatar/logo image and saves the resulting URL onto
+// widgetConfig.avatar, instead of the owner having to paste in a URL.
+const uploadWidgetAvatar = asyncHandler(async (req, res) => {
+  if (!req.file) throw new ApiError(400, "file is required");
+
+  const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
+  if (!bot) throw new ApiError(404, "Bot not found");
+
+  const previousAvatar = bot.widgetConfig.avatar;
+  const media = await storageService.saveAvatar({
+    actorType: "bot",
+    actorId: bot._id,
+    file: req.file,
+  });
+
+  bot.widgetConfig.avatar = media.url;
+  await bot.save();
+
+  if (previousAvatar && previousAvatar.startsWith(storageService.PUBLIC_PREFIX)) {
+    storageService.deleteMedia({ provider: "vps", url: previousAvatar }).catch(() => {});
+  }
+
+  res.status(200).json({ success: true, message: "Widget avatar updated", data: { bot: sanitizeBot(bot) } });
 });
 
 // DELETE /api/bots/:id
@@ -362,6 +389,7 @@ module.exports = {
   listBots,
   getBot,
   updateBot,
+  uploadWidgetAvatar,
   deleteBot,
   regenerateKey,
   setModelConfig,

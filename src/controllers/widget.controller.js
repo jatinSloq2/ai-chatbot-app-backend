@@ -1182,7 +1182,16 @@ function continueChat(pickedSessionId) {
         addTimestamp();
         addSystemMessage(data.assignedAgentName ? "You're now connected with " + data.assignedAgentName + "." : t("agentJoined"));
       }
-      if (data.status === "assigned") showAttachButton();
+      if (data.status === "assigned") {
+        showAttachButton();
+        // A conversation can be resolved+rated, then reopened and
+        // reassigned later (visitor asks for a human again) — each
+        // resolution gets its own CSAT prompt (see
+        // handover.service.js#resolveHandover), so let this session show
+        // the star picker again for the new cycle instead of silently
+        // staying suppressed from the first one.
+        csatShown = false;
+      }
       if (data.status === "resolved") {
         closeEventStream();
         hideAttachButton();

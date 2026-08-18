@@ -1,6 +1,7 @@
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const authService = require("../services/auth.service");
+const storageService = require("../services/storage.service");
 const User = require("../models/User");
 const emailService = require("../services/email.service");
 const {
@@ -177,8 +178,9 @@ const getMe = asyncHandler(async (req, res) => {
 });
 
 // PATCH /api/auth/me
-// body: { name?, avatar? } — avatar is a plain URL string, same convention
-// as Agent.avatar; there's no image-upload endpoint for this yet.
+// body: { name?, avatar? } — avatar can still be set as a plain URL string
+// directly (kept for flexibility), but POST /api/auth/me/avatar below is the
+// normal path now: upload a file, get a URL back, done.
 const updateMe = asyncHandler(async (req, res) => {
   const { name, avatar } = req.body;
   if (name === undefined && avatar === undefined) {
@@ -187,6 +189,31 @@ const updateMe = asyncHandler(async (req, res) => {
 
   const user = await authService.updateProfile({ userId: req.user._id, name, avatar });
   res.status(200).json({ success: true, message: "Profile updated", data: { user: sanitizeUser(user) } });
+});
+
+// POST /api/auth/me/avatar  (multipart "file")
+// Uploads a profile picture (VPS disk or Cloudinary — see storage.service.js,
+// driven by USING_VPS) and saves the resulting URL onto the user's account
+// in one step, exactly like updateMe but for an uploaded image instead of a
+// hand-typed URL.
+const uploadMyAvatar = asyncHandler(async (req, res) => {
+  if (!req.file) throw new ApiError(400, "file is required");
+
+  const previousAvatar = req.user.avatar;
+  const media = await storageService.saveAvatar({
+    actorType: "owner",
+    actorId: req.user._id,
+    file: req.file,
+  });
+
+  const user = await authService.updateProfile({ userId: req.user._id, avatar: media.url });
+
+  // Best-effort cleanup of the old file — never blocks the response.
+  if (previousAvatar && previousAvatar.startsWith(storageService.PUBLIC_PREFIX)) {
+    storageService.deleteMedia({ provider: "vps", url: previousAvatar }).catch(() => {});
+  }
+
+  res.status(200).json({ success: true, message: "Profile picture updated", data: { user: sanitizeUser(user) } });
 });
 
 // GET /api/auth/me/export
@@ -278,6 +305,7 @@ module.exports = {
   logout,
   getMe,
   updateMe,
+  uploadMyAvatar,
   exportMyData,
   changePassword,
   addPassword,

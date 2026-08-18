@@ -4,6 +4,7 @@ const router = express.Router();
 
 const authController = require("../controllers/auth.controller");
 const { protect } = require("../middlewares/auth.middleware");
+const { avatarUpload } = require("../middlewares/upload.middleware");
 const {
   signupRules,
   loginRules,
@@ -49,6 +50,7 @@ router.post("/refresh-token", authController.refreshToken);
 router.post("/logout", protect, authController.logout);
 router.get("/me", protect, authController.getMe);
 router.patch("/me", protect, authController.updateMe);
+router.post("/me/avatar", protect, avatarUpload.single("file"), authController.uploadMyAvatar);
 router.get("/me/export", protect, authController.exportMyData);
 router.post("/change-password", protect, strictLimiter, authController.changePassword);
 router.post("/add-password", protect, strictLimiter, authController.addPassword);

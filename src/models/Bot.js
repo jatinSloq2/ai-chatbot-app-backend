@@ -85,6 +85,12 @@ const botSchema = new mongoose.Schema(
       // pill with an icon + label, or the bot's avatar as the icon.
       launcherStyle: { type: String, enum: ["icon", "icon-text", "avatar"], default: "icon" },
       launcherText: { type: String, default: "Chat with us" },
+      // URL of the bot's avatar/logo image, shown as the launcher icon
+      // (when launcherStyle:"avatar") and in the chat header. Settable
+      // either as a plain URL or by uploading a file (see
+      // bot.controller.js#uploadWidgetAvatar) — same convention as
+      // User.avatar / Agent.avatar.
+      avatar: { type: String, default: null },
       // Short two-tone chime on new incoming bot/agent messages while the
       // widget is closed or the tab isn't focused. No audio file — the
       // script synthesizes it with the Web Audio API.

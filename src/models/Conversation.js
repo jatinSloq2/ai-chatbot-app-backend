@@ -33,7 +33,13 @@ const mediaSchema = new mongoose.Schema(
     mimeType: { type: String, default: null },
     size: { type: Number, default: null }, // bytes
     kind: { type: String, enum: ["image", "file"], default: "file" },
-  },
+    // Which storage backend actually holds this file (see
+    // storage.service.js — driven by the USING_VPS env toggle). Optional/
+    // absent on media saved before this field existed.
+    provider: { type: String, enum: ["vps", "cloudinary"], default: "vps" },
+    // Only set for provider:"cloudinary" — needed to delete the asset later.
+    publicId: { type: String, default: null },
+},
   { _id: false }
 );
 

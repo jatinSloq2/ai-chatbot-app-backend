@@ -46,6 +46,8 @@ const cannedResponseSchema = new mongoose.Schema(
                 mimeType: { type: String, default: null },
                 size: { type: Number, default: null },
                 kind: { type: String, enum: ["image", "file"], default: "file" },
+                provider: { type: String, enum: ["vps", "cloudinary"], default: "vps" },
+                publicId: { type: String, default: null },
             },
         ],
 

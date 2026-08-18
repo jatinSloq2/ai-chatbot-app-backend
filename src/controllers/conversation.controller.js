@@ -24,7 +24,7 @@ const listConversations = asyncHandler(async (req, res) => {
       .sort({ updatedAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit)
-      .select("sessionId type visitor messages handover createdAt updatedAt"),
+      .select("sessionId type visitor messages handover.status handover.csat handover.history createdAt updatedAt"),
     Conversation.countDocuments(filter),
   ]);
 
@@ -38,6 +38,13 @@ const listConversations = asyncHandler(async (req, res) => {
     // Set only once the visitor has actually rated the chat — null while
     // "requested"/"assigned"/unresolved, or resolved-but-not-yet-rated.
     csat: c.handover.csat?.rating ? c.handover.csat : null,
+    // True when any agent has been assigned to this conversation 2+
+    // separate times (e.g. a returning WhatsApp visitor keeps landing back
+    // with the same agent) — cheap enough to compute here so the list view
+    // can show a badge without a separate request per row.
+    hasRepeatAgentAssignment: handoverService
+      .summarizeHandoverAgents(c.handover.history || [])
+      .some((a) => a.isRepeatAssignment),
     startedAt: c.createdAt,
     lastActivityAt: c.updatedAt,
   }));
@@ -70,6 +77,11 @@ const getConversation = asyncHandler(async (req, res) => {
       // messages already carry role, content, via ("ai"|"agent"), agentName, createdAt
       messages: conversation.messages,
       handover: conversation.handover,
+      // Per-agent rollup — how many separate times each agent was assigned
+      // to this conversation and what they were rated across those stints
+      // (handover.history already has the raw per-stint data; this is just
+      // the grouped-by-agent view for the "assigned agents" panel).
+      agentSummary: handoverService.summarizeHandoverAgents(conversation.handover.history || []),
       startedAt: conversation.createdAt,
       lastActivityAt: conversation.updatedAt,
     },

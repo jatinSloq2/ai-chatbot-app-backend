@@ -1,6 +1,7 @@
 const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const agentService = require("../services/agent.service");
+const storageService = require("../services/storage.service");
 const Conversation = require("../models/Conversation");
 const { getActivePlan } = require("../services/bot.service");
 
@@ -74,6 +75,31 @@ const updateAgent = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { agent: sanitizeAgent(agent) } });
 });
 
+// POST /api/agents/:id/avatar  (multipart "file")
+// Lets the bot owner set a managed agent's profile picture by uploading an
+// image instead of pasting a URL — same VPS/Cloudinary backend as everything
+// else in storage.service.js.
+const uploadAgentAvatar = asyncHandler(async (req, res) => {
+  if (!req.file) throw new ApiError(400, "file is required");
+
+  const previous = await agentService.getOwnedAgent(req.params.id, req.user._id);
+  const previousAvatar = previous.avatar;
+
+  const media = await storageService.saveAvatar({
+    actorType: "agent",
+    actorId: req.params.id,
+    file: req.file,
+  });
+
+  const agent = await agentService.updateAgent(req.params.id, req.user._id, { avatar: media.url });
+
+  if (previousAvatar && previousAvatar.startsWith(storageService.PUBLIC_PREFIX)) {
+    storageService.deleteMedia({ provider: "vps", url: previousAvatar }).catch(() => { });
+  }
+
+  res.status(200).json({ success: true, message: "Agent avatar updated", data: { agent: sanitizeAgent(agent) } });
+});
+
 // DELETE /api/agents/:id
 const deleteAgent = asyncHandler(async (req, res) => {
   await agentService.deleteAgent(req.params.id, req.user._id);
@@ -125,4 +151,13 @@ const listAgentConversations = asyncHandler(async (req, res) => {
   });
 });
 
-module.exports = { createAgent, listAgents, getAgent, updateAgent, deleteAgent, listAgentConversations, sanitizeAgent };
+module.exports = {
+  createAgent,
+  listAgents,
+  getAgent,
+  updateAgent,
+  uploadAgentAvatar,
+  deleteAgent,
+  listAgentConversations,
+  sanitizeAgent,
+};

@@ -476,6 +476,46 @@ const transferHandover = async (fromAgentId, conversationId, toAgentId) => {
     return conversation;
 };
 
+// Builds a small per-agent rollup from handover.history — how many separate
+// times each agent has been assigned to this conversation, and every rating
+// earned across those stints. Powers the "assigned agents & their ratings"
+// view on a conversation (dashboard + agent panel), including flagging
+// repeat assignments (the same agent being handed this chat back multiple
+// times, e.g. a returning WhatsApp visitor).
+const summarizeHandoverAgents = (history = []) => {
+    const byAgent = new Map();
+
+    history.forEach((h) => {
+        const agentId = (h.agent?._id || h.agent)?.toString();
+        if (!agentId) return;
+
+        if (!byAgent.has(agentId)) {
+            byAgent.set(agentId, {
+                agentId,
+                agentName: h.agentName || null,
+                timesAssigned: 0,
+                ratings: [],
+            });
+        }
+        const entry = byAgent.get(agentId);
+        entry.timesAssigned += 1;
+        // Keep the freshest name snapshot in case it changed between stints.
+        if (h.agentName) entry.agentName = h.agentName;
+        if (h.csatRating) entry.ratings.push(h.csatRating);
+    });
+
+    return Array.from(byAgent.values()).map((entry) => ({
+        ...entry,
+        averageRating: entry.ratings.length
+            ? Math.round((entry.ratings.reduce((a, b) => a + b, 0) / entry.ratings.length) * 10) / 10
+            : null,
+        // 2+ separate assignment stints for the same agent on the same
+        // conversation — surfaced so the dashboard/agent panel can flag it
+        // (e.g. a returning visitor keeps landing back with the same agent).
+        isRepeatAssignment: entry.timesAssigned >= 2,
+    }));
+};
+
 // Every conversation this agent has been rated on, most recent first.
 // Deliberately NOT filtered by handover.status — a rated conversation stays
 // visible to the agent here forever, independent of whatever the pending/
@@ -551,7 +591,24 @@ const resolveHandover = async (agentId, conversationId) => {
     const conversation = await getMyConversation(agentId, conversationId);
     conversation.handover.status = "resolved";
     conversation.handover.resolvedAt = new Date();
-    conversation.handover.csat.promptedAt = new Date();
+
+    // Arm a FRESH CSAT prompt for this resolution. A conversation can be
+    // resolved, rated, then reopened (visitor asks for a human again) and
+    // reassigned/resolved again — most commonly on WhatsApp, where the
+    // same phone number can restart a handover any time. Each resolution
+    // is its own opportunity to be rated, so the top-level csat object is
+    // reset here rather than only having its promptedAt bumped — otherwise
+    // a rating left over from a previous resolution cycle would
+    // permanently block submitCsat's "already rated" guard from ever
+    // firing again for this conversation. The per-cycle rating itself
+    // isn't lost: submitCsat tags the specific handover.history entry that
+    // earned it (see below), so every past rating stays visible there.
+    conversation.handover.csat = {
+      promptedAt: new Date(),
+      rating: null,
+      comment: null,
+      ratedAt: null,
+    };
 
     // Close out this agent's open history entry — same bookkeeping
     // transferHandover does, just with endReason:"resolved" instead of
@@ -593,6 +650,7 @@ const resolveHandover = async (agentId, conversationId) => {
 
 module.exports = {
     eligibleBotIds,
+    summarizeHandoverAgents,
     requestHandover,
     appendVisitorMessage,
     appendVisitorMedia,

@@ -50,4 +50,29 @@ const mediaUpload = multer({
   limits: { fileSize: MAX_MEDIA_SIZE_MB * 1024 * 1024 },
 });
 
-module.exports = { upload, mediaUpload };
+// --- Avatars (profile pictures — dashboard user, agent) ---
+// Images only, and a tighter size cap than general chat media — these are
+// rendered small (a circle in a header/sidebar), so there's no reason to
+// accept a 20MB file for one.
+const AVATAR_ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "webp"];
+const MAX_AVATAR_SIZE_MB = 5;
+
+const avatarStorage = multer.memoryStorage();
+
+const avatarFileFilter = (req, file, cb) => {
+  const ext = file.originalname.split(".").pop().toLowerCase();
+  if (!AVATAR_ALLOWED_EXTENSIONS.includes(ext)) {
+    return cb(
+      new ApiError(400, `Unsupported image type ".${ext}". Allowed: ${AVATAR_ALLOWED_EXTENSIONS.join(", ")}`)
+    );
+  }
+  cb(null, true);
+};
+
+const avatarUpload = multer({
+  storage: avatarStorage,
+  fileFilter: avatarFileFilter,
+  limits: { fileSize: MAX_AVATAR_SIZE_MB * 1024 * 1024 },
+});
+
+module.exports = { upload, mediaUpload, avatarUpload };

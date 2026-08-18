@@ -3,7 +3,7 @@ const router = express.Router();
 
 const agentAuthController = require("../controllers/agentAuth.controller");
 const { protectAgent } = require("../middlewares/agentAuth.middleware");
-const { mediaUpload } = require("../middlewares/upload.middleware");
+const { mediaUpload, avatarUpload } = require("../middlewares/upload.middleware");
 
 // Public (no agent session yet)
 router.post("/login", agentAuthController.login);
@@ -14,6 +14,7 @@ router.use(protectAgent);
 
 router.post("/logout", agentAuthController.logout);
 router.get("/me", agentAuthController.getMe);
+router.post("/me/avatar", avatarUpload.single("file"), agentAuthController.uploadMyAvatar);
 router.patch("/status", agentAuthController.setStatus);
 
 router.post("/fcm-token", agentAuthController.registerFcmToken);
