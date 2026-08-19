@@ -116,7 +116,15 @@ const listAgentConversations = asyncHandler(async (req, res) => {
 
   const page = Math.max(1, parseInt(req.query.page) || 1);
   const limit = Math.min(50, parseInt(req.query.limit) || 20);
-  const filter = { "handover.assignedAgent": agent._id };
+  // Match on handover.history, not just the CURRENT assignedAgent — an
+  // agent who handled a stint on this chat (even one they were later
+  // transferred away from, or a chat that's since moved into a new
+  // resolve/rate cycle) should still show up here, and their per-stint
+  // ratings shouldn't disappear once a later cycle resets the top-level
+  // handover.csat back to null (see handover.service.js#resolveHandover).
+  const filter = {
+    $or: [{ "handover.assignedAgent": agent._id }, { "handover.history.agent": agent._id }],
+  };
 
   const [conversations, total] = await Promise.all([
     Conversation.find(filter)
@@ -128,19 +136,35 @@ const listAgentConversations = asyncHandler(async (req, res) => {
     Conversation.countDocuments(filter),
   ]);
 
-  const summarized = conversations.map((c) => ({
-    sessionId: c.sessionId,
-    botId: c.bot?._id,
-    botName: c.bot?.name || "Deleted bot",
-    type: c.type,
-    visitor: c.visitor,
-    messageCount: c.messages.length,
-    lastMessage: c.messages[c.messages.length - 1]?.content?.slice(0, 120) || "",
-    handoverStatus: c.handover.status,
-    csat: c.handover.csat?.rating ? c.handover.csat : null,
-    startedAt: c.createdAt,
-    lastActivityAt: c.updatedAt,
-  }));
+  const summarized = conversations.map((c) => {
+    // Every rating THIS agent earned on THIS conversation, oldest first —
+    // there can be more than one (reopened + resolved + rated again, most
+    // commonly on WhatsApp). Pulled from handover.history, which keeps
+    // every past stint's csatRating/csatComment/csatRatedAt untouched even
+    // after the top-level handover.csat resets for a new cycle.
+    const ratings = (c.handover.history || [])
+      .filter((h) => h.agent?.toString() === agent._id.toString() && h.csatRating)
+      .map((h) => ({ rating: h.csatRating, comment: h.csatComment || null, ratedAt: h.csatRatedAt || null }));
+
+    return {
+      sessionId: c.sessionId,
+      botId: c.bot?._id,
+      botName: c.bot?.name || "Deleted bot",
+      type: c.type,
+      visitor: c.visitor,
+      messageCount: c.messages.length,
+      lastMessage: c.messages[c.messages.length - 1]?.content?.slice(0, 120) || "",
+      handoverStatus: c.handover.status,
+      // Kept for anything still reading the old singular shape.
+      csat: c.handover.csat?.rating ? c.handover.csat : null,
+      ratings,
+      ratingsAverage: ratings.length
+        ? Math.round((ratings.reduce((s, r) => s + r.rating, 0) / ratings.length) * 10) / 10
+        : null,
+      startedAt: c.createdAt,
+      lastActivityAt: c.updatedAt,
+    };
+  });
 
   res.status(200).json({
     success: true,

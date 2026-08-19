@@ -291,6 +291,8 @@ const submitCsat = async (bot, sessionId, rating, comment) => {
         });
         if (latestResolvedIdx !== -1) {
             conversation.handover.history[latestResolvedIdx].csatRating = rating;
+            conversation.handover.history[latestResolvedIdx].csatComment = comment || null;
+            conversation.handover.history[latestResolvedIdx].csatRatedAt = conversation.handover.csat.ratedAt;
         }
     }
 
@@ -532,16 +534,49 @@ const summarizeHandoverAgents = (history = []) => {
 // already point at someone else by the time the visitor actually rates
 // it). history keeps every agent who ever touched the chat, so this still
 // finds it.
+// NOTE: matches on handover.history — NOT handover.csat.rating. The
+// top-level handover.csat object only ever holds the CURRENT resolution
+// cycle's rating and gets reset to null every time the conversation is
+// resolved again (see resolveHandover). A conversation that was rated once,
+// then reopened and resolved a second time but not yet re-rated, would
+// otherwise vanish from this agent's rating history the moment the second
+// cycle started — even though the first rating is still real and still
+// theirs. handover.history[].csatRating is never reset, so that's the
+// source of truth here.
 const listRatedForAgent = async (agentId, { limit = 50, skip = 0 } = {}) => {
-    return Conversation.find({
-        $or: [{ "handover.assignedAgent": agentId }, { "handover.history.agent": agentId }],
-        "handover.csat.rating": { $ne: null },
+    const conversations = await Conversation.find({
+        "handover.history": { $elemMatch: { agent: agentId, csatRating: { $ne: null } } },
     })
-        .sort({ "handover.csat.ratedAt": -1 })
-        .skip(skip)
-        .limit(limit)
+        .sort({ updatedAt: -1 })
         .populate("bot", "name")
         .select("bot sessionId visitor handover createdAt updatedAt");
+
+    // Flatten to one row PER RATING, not per conversation — a single
+    // conversation/session can carry several independent ratings for this
+    // agent (multiple resolve cycles, e.g. a returning WhatsApp number),
+    // and each one needs to show up as its own entry with its own
+    // timestamp/comment instead of only the latest overwriting the rest.
+    const flattened = [];
+    conversations.forEach((c) => {
+        (c.handover.history || []).forEach((h, idx) => {
+            if (h.agent?.toString() !== agentId.toString() || !h.csatRating) return;
+            flattened.push({
+                id: `${c._id}:${idx}`,
+                conversationId: c._id,
+                botId: c.bot?._id || c.bot,
+                botName: c.bot?.name || null,
+                sessionId: c.sessionId,
+                visitor: c.visitor,
+                rating: h.csatRating,
+                comment: h.csatComment || null,
+                ratedAt: h.csatRatedAt || null,
+                createdAt: c.createdAt,
+            });
+        });
+    });
+
+    flattened.sort((a, b) => new Date(b.ratedAt || 0) - new Date(a.ratedAt || 0));
+    return flattened.slice(skip, skip + limit);
 };
 
 // options: { media, richContent, cannedResponseId } — all optional. A

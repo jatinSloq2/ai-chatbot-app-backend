@@ -251,32 +251,25 @@ const sanitizeCanned = (c) => ({
   richContent: c.richContent,
 });
 
-const sanitizeRatedConversation = (c) => ({
-  id: c._id,
-  botId: c.bot?._id || c.bot,
-  botName: c.bot?.name || null,
-  sessionId: c.sessionId,
-  visitor: c.visitor,
-  csat: c.handover.csat,
-  resolvedAt: c.handover.resolvedAt,
-  createdAt: c.createdAt,
-});
-
 // GET /api/agent-auth/csat  — this agent's own rating history, independent
 // of whether the underlying conversation is still "active" anywhere else.
 // Answers "how am I doing" even long after every one of these chats ended.
+// One entry PER RATING (not per conversation) — the same session/visitor
+// can rate this agent more than once across separate resolve cycles, and
+// each rating needs its own row with its own timestamp/comment. See
+// handover.service.js#listRatedForAgent.
 const listMyRatings = asyncHandler(async (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 100);
   const skip = Number(req.query.skip) || 0;
 
-  const conversations = await handoverService.listRatedForAgent(req.agent._id, { limit, skip });
+  const ratings = await handoverService.listRatedForAgent(req.agent._id, { limit, skip });
 
   res.status(200).json({
     success: true,
     data: {
       average: csatAverage(req.agent.performance),
       count: req.agent.performance?.csatCount || 0,
-      ratings: conversations.map(sanitizeRatedConversation),
+      ratings,
     },
   });
 });

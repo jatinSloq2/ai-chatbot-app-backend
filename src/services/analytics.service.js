@@ -101,6 +101,7 @@ const getBotAnalytics = async (botId, days = 30) => {
   const [
     totalWidget,
     totalTest,
+    totalWhatsapp,
     uniqueSessions,
     uniqueDomains,
     successRate,
@@ -116,13 +117,19 @@ const getBotAnalytics = async (botId, days = 30) => {
     // Total test messages
     MessageEvent.countDocuments({ bot: botId, type: "test", createdAt: { $gte: since } }),
 
-    // Unique visitor sessions
+    // Total WhatsApp messages — was previously never counted anywhere in
+    // this dashboard (every query here was hardcoded to type:"widget"),
+    // so a bot getting real WhatsApp traffic looked completely idle.
+    MessageEvent.countDocuments({ bot: botId, type: "whatsapp", createdAt: { $gte: since } }),
+
+    // Unique visitor sessions (widget only — WhatsApp sessions are
+    // conversations, not WidgetSession docs; see sessions.whatsapp below)
     WidgetSession.countDocuments({ bot: botId, createdAt: { $gte: since } }),
 
     // Unique domains using this bot
     MessageEvent.distinct("domain", { bot: botId, type: "widget", domain: { $ne: null } }),
 
-    // Success rate
+    // Success rate — across every channel
     MessageEvent.aggregate([
       { $match: { bot: botId, createdAt: { $gte: since } } },
       { $group: {
@@ -132,13 +139,15 @@ const getBotAnalytics = async (botId, days = 30) => {
       }},
     ]),
 
-    // Average response time (ms)
+    // Average response time (ms) — across every channel, not just widget
     MessageEvent.aggregate([
-      { $match: { bot: botId, type: "widget", createdAt: { $gte: since }, totalMs: { $ne: null } } },
+      { $match: { bot: botId, createdAt: { $gte: since }, totalMs: { $ne: null } } },
       { $group: { _id: null, avgMs: { $avg: "$totalMs" } } },
     ]),
 
-    // Messages per day (for chart)
+    // Messages per day (for chart) — grouped by type so widget/test/
+    // whatsapp each get their own series instead of whatsapp being folded
+    // in invisibly.
     MessageEvent.aggregate([
       { $match: { bot: botId, createdAt: { $gte: since } } },
       { $group: {
@@ -151,7 +160,7 @@ const getBotAnalytics = async (botId, days = 30) => {
       { $sort: { "_id.date": 1 } },
     ]),
 
-    // Top embedding domains
+    // Top embedding domains (widget-only concept — WhatsApp has no domain)
     MessageEvent.aggregate([
       { $match: { bot: botId, type: "widget", createdAt: { $gte: since }, domain: { $ne: null } } },
       { $group: { _id: "$domain", messages: { $sum: 1 }, sessions: { $addToSet: "$sessionId" } } },
@@ -160,9 +169,9 @@ const getBotAnalytics = async (botId, days = 30) => {
       { $limit: 10 },
     ]),
 
-    // Messages by hour of day (to see peak times)
+    // Messages by hour of day (to see peak times) — across every channel
     MessageEvent.aggregate([
-      { $match: { bot: botId, type: "widget", createdAt: { $gte: since } } },
+      { $match: { bot: botId, createdAt: { $gte: since } } },
       { $group: {
         _id: { $hour: "$createdAt" },
         count: { $sum: 1 },
@@ -188,7 +197,7 @@ const getBotAnalytics = async (botId, days = 30) => {
   const dayMap = {};
   messagesPerDay.forEach((d) => {
     const date = d._id.date;
-    if (!dayMap[date]) dayMap[date] = { date, widget: 0, test: 0 };
+    if (!dayMap[date]) dayMap[date] = { date, widget: 0, test: 0, whatsapp: 0 };
     dayMap[date][d._id.type] = d.count;
   });
   const dailyChart = Object.values(dayMap).sort((a, b) => a.date.localeCompare(b.date));
@@ -210,7 +219,8 @@ const getBotAnalytics = async (botId, days = 30) => {
     messages: {
       widget:     totalWidget,
       test:       totalTest,
-      total:      totalWidget + totalTest,
+      whatsapp:   totalWhatsapp,
+      total:      totalWidget + totalTest + totalWhatsapp,
     },
     sessions: {
       unique:     uniqueSessions,
@@ -256,9 +266,11 @@ const getPlatformAnalytics = async (days = 30) => {
     MessageEvent.countDocuments({ createdAt: { $gte: since } }),
     WidgetSession.countDocuments({ createdAt: { $gte: since } }),
 
-    // Top bots by message volume
+    // Top bots by message volume — across every channel (widget, test,
+    // whatsapp), not just widget, so a bot driven mostly by WhatsApp
+    // traffic doesn't disappear from this leaderboard.
     MessageEvent.aggregate([
-      { $match: { createdAt: { $gte: since }, type: "widget" } },
+      { $match: { createdAt: { $gte: since } } },
       { $group: { _id: "$bot", messages: { $sum: 1 } } },
       { $sort: { messages: -1 } },
       { $limit: 10 },

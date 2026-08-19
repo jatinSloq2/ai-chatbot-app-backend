@@ -149,6 +149,15 @@ const conversationSchema = new mongoose.Schema(
             // earlier agents in the chain — resolving well is what's being
             // measured, not merely having touched the conversation.
             csatRating: { type: Number, min: 1, max: 5, default: null },
+            // Comment + timestamp for THIS stint's rating, mirrored from
+            // handover.csat at the moment it was submitted (see
+            // handover.service.js#submitCsat). Without these, a
+            // conversation rated more than once (reopened, resolved again,
+            // rated again) could only ever show its latest comment/date —
+            // every earlier stint's csatRating number would be visible but
+            // orphaned with no context of when/what was said.
+            csatComment: { type: String, default: null },
+            csatRatedAt: { type: Date, default: null },
           },
         ],
         default: [],

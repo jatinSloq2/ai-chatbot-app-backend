@@ -116,9 +116,22 @@ const saveToCloudinary = async (segments, file) => {
   const folder = [CLOUDINARY_ROOT_FOLDER, ...segments].join("/");
   const kind = kindOf(file);
 
+  // IMPORTANT: for resource_type:"raw" (every non-image upload — pdfs,
+  // docs, etc), Cloudinary does NOT track a separate "format" the way it
+  // does for images/video. Whatever public_id we give it is exactly what
+  // ends up in the delivered secure_url. Stripping the extension here used
+  // to leave the delivered URL extensionless, so when that link got fetched
+  // by a third party (e.g. WhatsApp's Cloud API downloading a "send by
+  // link" media message) there was no filename/extension to infer a type
+  // from and it came back down as a generic .bin. Keeping the real
+  // extension on the public_id for raw uploads fixes that — images/video
+  // still get it stripped since Cloudinary appends their format itself.
+  const publicId =
+    kind === "image" ? `${unique}-${fileName.replace(/\.[^.]+$/, "")}` : `${unique}-${fileName}`;
+
   const result = await cloudinaryConfig.uploadBuffer(file.buffer, {
     folder,
-    publicId: `${unique}-${fileName.replace(/\.[^.]+$/, "")}`,
+    publicId,
     resourceType: kind === "image" ? "image" : "raw",
   });
 
