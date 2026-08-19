@@ -36,23 +36,52 @@ const getWhatsappCredential = async (botId) => {
 // plain text message — this is what makes an agent's file/image attachment
 // actually reach a WhatsApp visitor rather than silently only showing up in
 // the dashboard.
-const relayToWhatsappIfNeeded = async (conversation, text, media = null) => {
+//
+// `messageId`, when passed, is the _id of the specific
+// Conversation.messages[] entry this relay is for — its deliveryStatus/
+// whatsappMessageId/deliveryError get updated in place once the send
+// settles, so the agent's chat view can show sent/failed instead of the
+// message just silently vanishing into the void on a failure (which is
+// what used to happen: this used to be a fire-and-forget
+// `.catch(() => {})` with nothing persisted anywhere).
+const relayToWhatsappIfNeeded = async (conversation, text, media = null, messageId = null) => {
     if (conversation.type !== "whatsapp") return;
     if (!text?.trim() && !media) return;
+
+    const markStatus = async (fields) => {
+        if (!messageId) return;
+        try {
+            const set = {};
+            Object.entries(fields).forEach(([key, value]) => {
+                set[`messages.$.${key}`] = value;
+            });
+            await Conversation.updateOne({ _id: conversation._id, "messages._id": messageId }, { $set: set });
+            realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+        } catch (err) {
+            logger.error(`[whatsapp] Failed to persist delivery status for message ${messageId}: ${err.message}`);
+        }
+    };
+
     try {
         const credential = await getWhatsappCredential(conversation.bot);
-        if (!credential) return;
+        if (!credential) {
+            await markStatus({ deliveryStatus: "failed", deliveryError: "No active WhatsApp credential configured for this bot" });
+            return;
+        }
+        let result;
         if (media) {
-            await whatsappSender.sendWhatsappMedia(credential.whatsapp, {
+            result = await whatsappSender.sendWhatsappMedia(credential.whatsapp, {
                 to: conversation.sessionId,
                 media,
                 caption: text,
             });
         } else {
-            await whatsappSender.sendWhatsappText(credential.whatsapp, { to: conversation.sessionId, message: text });
+            result = await whatsappSender.sendWhatsappText(credential.whatsapp, { to: conversation.sessionId, message: text });
         }
+        await markStatus({ deliveryStatus: "sent", whatsappMessageId: result?.id || null, deliveryError: null });
     } catch (err) {
         logger.error(`[whatsapp] Failed to relay agent reply for conversation ${conversation._id}: ${err.message}`);
+        await markStatus({ deliveryStatus: "failed", deliveryError: err.message?.slice(0, 300) || "Failed to send" });
     }
 };
 
@@ -319,14 +348,14 @@ const listPending = async (agentId) => {
     return Conversation.find({ bot: { $in: botIds }, "handover.status": "requested" })
         .sort({ "handover.requestedAt": 1 })
         .populate("bot", "name")
-        .select("bot sessionId visitor messages handover createdAt updatedAt");
+        .select("bot type sessionId visitor messages handover createdAt updatedAt");
 };
 
 const listAssignedToAgent = async (agentId) => {
     return Conversation.find({ "handover.assignedAgent": agentId, "handover.status": "assigned" })
         .sort({ "handover.assignedAt": -1 })
         .populate("bot", "name")
-        .select("bot sessionId visitor messages handover createdAt updatedAt");
+        .select("bot type sessionId visitor messages handover createdAt updatedAt");
 };
 
 // Atomic accept via a conditional findOneAndUpdate: only succeeds if the
@@ -591,6 +620,7 @@ const sendAgentMessage = async (agent, conversationId, message, options = {}) =>
     }
 
     const { media, richContent, cannedResponseId } = options;
+    const isWhatsapp = conversation.type === "whatsapp";
 
     conversation.messages.push({
         role: "assistant",
@@ -601,8 +631,13 @@ const sendAgentMessage = async (agent, conversationId, message, options = {}) =>
         media: media || null,
         richContent: richContent || null,
         cannedResponse: cannedResponseId || null,
+        // "pending" immediately so the agent's UI can show a sending
+        // indicator right away instead of nothing happening until the
+        // relay below settles a moment later.
+        deliveryStatus: isWhatsapp ? "pending" : null,
     });
     await conversation.save();
+    const pushedMessage = conversation.messages[conversation.messages.length - 1];
 
     if (cannedResponseId) {
         CannedResponse.updateOne({ _id: cannedResponseId }, { $inc: { usageCount: 1 } }).catch(() => { });
@@ -614,8 +649,39 @@ const sendAgentMessage = async (agent, conversationId, message, options = {}) =>
     // the visitor's end, so this is the only way the agent's reply actually
     // reaches them (now including media — see relayToWhatsappIfNeeded).
     // Widget messages already reach the visitor via the realtime publish
-    // above and don't need this.
-    relayToWhatsappIfNeeded(conversation, message, media || null).catch(() => { });
+    // above and don't need this. relayToWhatsappIfNeeded handles its own
+    // errors internally (and persists deliveryStatus:"failed" when it hits
+    // one), so nothing further to catch here.
+    relayToWhatsappIfNeeded(conversation, message, media || null, pushedMessage._id);
+
+    return conversation;
+};
+
+// Re-attempts delivery for ONE message that previously failed to reach the
+// visitor over WhatsApp (deliveryStatus:"failed") — e.g. a transient Meta
+// API error, an expired media link, or the credential having been briefly
+// misconfigured. Re-sends the exact same content/media rather than creating
+// a duplicate message; deliveryStatus flips back to "pending" immediately
+// so the agent's retry button shows feedback right away.
+const retryAgentMessage = async (agent, conversationId, messageId) => {
+    const conversation = await getMyConversation(agent._id, conversationId);
+    if (conversation.type !== "whatsapp") {
+        throw new ApiError(400, "Delivery retry only applies to WhatsApp conversations");
+    }
+
+    const message = conversation.messages.id(messageId);
+    if (!message) throw new ApiError(404, "Message not found");
+    if (message.via !== "agent") throw new ApiError(400, "Only agent-sent messages can be retried");
+    if (message.deliveryStatus !== "failed") {
+        throw new ApiError(400, "Only a failed message can be retried");
+    }
+
+    message.deliveryStatus = "pending";
+    message.deliveryError = null;
+    await conversation.save();
+    realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+
+    relayToWhatsappIfNeeded(conversation, message.content, message.media || null, message._id);
 
     return conversation;
 };
@@ -705,6 +771,7 @@ module.exports = {
     getMyConversation,
     listRatedForAgent,
     sendAgentMessage,
+    retryAgentMessage,
     resolveHandover,
     listTransferCandidates,
     transferHandover,

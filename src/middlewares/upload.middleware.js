@@ -30,7 +30,19 @@ const MEDIA_ALLOWED_EXTENSIONS = [
   "jpg", "jpeg", "png", "gif", "webp", "svg",
   "pdf", "doc", "docx", "txt", "csv", "xlsx", "ppt", "pptx",
 ];
-const MAX_MEDIA_SIZE_MB = 20;
+// 20MB was a flat cap regardless of file type, which was already wrong in
+// both directions for WhatsApp specifically: it silently accepted images up
+// to 20MB that Meta's Cloud API would reject at 5MB (failing invisibly at
+// send time — see relayToWhatsappIfNeeded's deliveryStatus), and it capped
+// documents at 20MB when WhatsApp actually allows up to 100MB. The
+// per-type WhatsApp ceilines (image 5MB, audio/video 16MB, document 100MB)
+// are enforced client-side before upload even starts (see
+// agent-chat-sheet.tsx's onFileSelected) so the agent gets instant
+// feedback instead of a failed send a few seconds later; this server-side
+// limit is just the outer safety net covering every upload path
+// (including non-WhatsApp/widget attachments, which have no Meta cap at
+// all), sized to the largest thing anything legitimately sends here.
+const MAX_MEDIA_SIZE_MB = 100;
 
 const mediaStorage = multer.memoryStorage();
 

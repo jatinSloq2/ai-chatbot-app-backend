@@ -36,6 +36,7 @@ router.post(
   mediaUpload.single("file"),
   agentAuthController.sendAgentMedia
 );
+router.post("/conversations/:conversationId/messages/:messageId/retry", agentAuthController.retryAgentMessage);
 router.post("/conversations/:conversationId/resolve", agentAuthController.resolveConversation);
 router.get("/conversations/:conversationId/transfer-candidates", agentAuthController.listTransferCandidates);
 router.post("/conversations/:conversationId/transfer", agentAuthController.transferHandover);

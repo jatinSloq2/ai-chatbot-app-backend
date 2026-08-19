@@ -208,6 +208,9 @@ const sanitizeConversation = (c) => ({
   id: c._id,
   botId: c.bot?._id || c.bot,
   botName: c.bot?.name || null,
+  // Needed client-side to know whether WhatsApp's delivery/size rules apply
+  // to this conversation (widget/test attachments have neither).
+  type: c.type,
   sessionId: c.sessionId,
   visitor: c.visitor,
   messages: c.messages,
@@ -336,6 +339,18 @@ const sendAgentMedia = asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data: { conversation: sanitizeConversation(updated) } });
 });
 
+// POST /api/agent-auth/conversations/:conversationId/messages/:messageId/retry
+// Re-sends a single WhatsApp message that previously failed to deliver
+// (deliveryStatus:"failed") — see handoverService.retryAgentMessage.
+const retryAgentMessage = asyncHandler(async (req, res) => {
+  const conversation = await handoverService.retryAgentMessage(
+    req.agent,
+    req.params.conversationId,
+    req.params.messageId
+  );
+  res.status(200).json({ success: true, data: { conversation: sanitizeConversation(conversation) } });
+});
+
 // GET /api/agent-auth/conversations/:conversationId/transfer-candidates
 // Other agents on this conversation's bot the current agent could hand it
 // off to — powers the "Transfer to..." picker.
@@ -445,6 +460,7 @@ module.exports = {
   getMyConversation,
   sendAgentMessage,
   sendAgentMedia,
+  retryAgentMessage,
   listTransferCandidates,
   transferHandover,
   listCannedResponses,

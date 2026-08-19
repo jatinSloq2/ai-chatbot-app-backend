@@ -65,8 +65,28 @@ const messageSchema = new mongoose.Schema(
 
     // If a canned response (macro) was used to send this message.
     cannedResponse: { type: mongoose.Schema.Types.ObjectId, ref: "CannedResponse", default: null },
+
+    // --- WhatsApp delivery tracking (agent-sent messages only) ---
+    // Meta's own message id (WAMID) for whichever outbound WhatsApp send
+    // this message resulted in — set once relayToWhatsappIfNeeded's POST
+    // to the Cloud API succeeds. This is what lets an incoming "status"
+    // webhook (sent/delivered/read/failed) find its way back to the exact
+    // message it's reporting on (see whatsapp.controller.js's status
+    // handling).
+    whatsappMessageId: { type: String, default: null },
+    // null            — not a WhatsApp conversation, or never attempted a
+    //                    relay (e.g. an AI message on the widget channel).
+    // "pending"       — relay attempted, Meta hasn't accepted/rejected it yet.
+    // "sent"          — Meta accepted it (we have a WAMID); delivery/read
+    //                    receipts, if they arrive, upgrade this further.
+    // "delivered"     — Meta's "delivered" status webhook came in.
+    // "read"          — Meta's "read" status webhook came in.
+    // "failed"        — the send itself errored, or Meta's "failed" status
+    //                    webhook came in. See deliveryError for why.
+    deliveryStatus: { type: String, enum: [null, "pending", "sent", "delivered", "read", "failed"], default: null },
+    deliveryError: { type: String, default: null },
   },
-  { _id: false, timestamps: { createdAt: true, updatedAt: false } }
+  { timestamps: { createdAt: true, updatedAt: false } }
 );
 
 const conversationSchema = new mongoose.Schema(
@@ -188,5 +208,9 @@ conversationSchema.index({ "handover.assignedAgent": 1, "handover.status": 1 });
 // agent EVER handled (not just the one they're currently assigned to),
 // filtered down to rated ones.
 conversationSchema.index({ "handover.history.agent": 1, "handover.csat.rating": 1 });
+// Backs the WhatsApp status webhook's lookup — finding which conversation
+// (and which message within it) a "sent/delivered/read/failed" status
+// update refers to. See whatsapp.controller.js's status handling.
+conversationSchema.index({ "messages.whatsappMessageId": 1 });
 
 module.exports = mongoose.model("Conversation", conversationSchema);

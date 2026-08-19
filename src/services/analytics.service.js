@@ -180,14 +180,22 @@ const getBotAnalytics = async (botId, days = 30) => {
     ]),
 
     // CSAT — average rating + 1-5 star distribution across every rated
-    // conversation for this bot in the window. Deliberately keyed off
-    // handover.csat.ratedAt (when the visitor actually rated it), not the
-    // conversation's createdAt, so "last 30 days" reflects recent feedback
-    // even for a long-running conversation.
+    // conversation for this bot in the window, split by channel (widget vs
+    // WhatsApp — a blended number was hiding the fact that WhatsApp
+    // handovers often run at a very different satisfaction level than
+    // widget ones). Reads from handover.history[].csatRating/csatRatedAt
+    // rather than the top-level handover.csat, which only ever holds the
+    // CURRENT resolve cycle's rating and resets to null every time a
+    // conversation is resolved again (see handover.service.js#
+    // resolveHandover) — the old query here had exactly that staleness
+    // bug and could silently drop ratings from a conversation that had
+    // since moved into a new, not-yet-rated cycle.
     Conversation.aggregate([
-      { $match: { bot: botId, "handover.csat.rating": { $ne: null }, "handover.csat.ratedAt": { $gte: since } } },
+      { $match: { bot: botId, type: { $in: ["widget", "whatsapp"] } } },
+      { $unwind: "$handover.history" },
+      { $match: { "handover.history.csatRating": { $ne: null }, "handover.history.csatRatedAt": { $gte: since } } },
       { $group: {
-        _id: "$handover.csat.rating",
+        _id: { type: "$type", rating: "$handover.history.csatRating" },
         count: { $sum: 1 },
       }},
     ]),
@@ -205,14 +213,22 @@ const getBotAnalytics = async (botId, days = 30) => {
   const successData = successRate[0] || { total: 0, successful: 0 };
   const avgMs = avgResponseTime[0]?.avgMs || null;
 
-  const csatDistribution = [1, 2, 3, 4, 5].map((star) => ({
-    rating: star,
-    count: csatBuckets.find((b) => b._id === star)?.count || 0,
-  }));
-  const csatCount = csatDistribution.reduce((sum, b) => sum + b.count, 0);
-  const csatAverage = csatCount
-    ? Math.round((csatDistribution.reduce((sum, b) => sum + b.rating * b.count, 0) / csatCount) * 10) / 10
-    : null;
+  // Builds { average, count, distribution } from a flat list of
+  // { rating, count } buckets — shared by the combined csat block and each
+  // per-channel one below so they're computed identically.
+  const buildCsatBlock = (buckets) => {
+    const distribution = [1, 2, 3, 4, 5].map((star) => ({
+      rating: star,
+      count: buckets.filter((b) => b.rating === star).reduce((s, b) => s + b.count, 0),
+    }));
+    const count = distribution.reduce((sum, b) => sum + b.count, 0);
+    const average = count
+      ? Math.round((distribution.reduce((sum, b) => sum + b.rating * b.count, 0) / count) * 10) / 10
+      : null;
+    return { average, count, distribution };
+  };
+
+  const bucketsFlat = csatBuckets.map((b) => ({ type: b._id.type, rating: b._id.rating, count: b.count }));
 
   return {
     rangeDays: days,
@@ -236,11 +252,16 @@ const getBotAnalytics = async (botId, days = 30) => {
         : null,
       avgResponseMs: avgMs ? Math.round(avgMs) : null,
     },
-    // Human-handover satisfaction — how visitors rated resolved agent chats.
+    // Human-handover satisfaction — how visitors rated resolved agent
+    // chats. Combined across channels for back-compat, plus a byChannel
+    // split since widget and WhatsApp handovers can run at very different
+    // satisfaction levels and a single blended number was hiding that.
     csat: {
-      average: csatAverage,
-      count: csatCount,
-      distribution: csatDistribution,
+      ...buildCsatBlock(bucketsFlat),
+      byChannel: {
+        widget: buildCsatBlock(bucketsFlat.filter((b) => b.type === "widget")),
+        whatsapp: buildCsatBlock(bucketsFlat.filter((b) => b.type === "whatsapp")),
+      },
     },
     charts: {
       messagesPerDay: dailyChart,

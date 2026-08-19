@@ -33,7 +33,7 @@ async function sendWhatsappText(cred, { to, message }) {
     if (!to) throw new Error("A destination WhatsApp number is required");
     if (!message?.trim()) throw new Error("message is required");
 
-    await axios.post(
+    const { data } = await axios.post(
         `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`,
         {
             messaging_product: "whatsapp",
@@ -47,6 +47,7 @@ async function sendWhatsappText(cred, { to, message }) {
             timeout: 15000,
         }
     );
+    return { id: data?.messages?.[0]?.id || null };
 }
 
 // Maps our internal media "kind" (image|file) + mimeType to the WhatsApp
@@ -91,10 +92,11 @@ async function sendWhatsappMedia(cred, { to, media, caption }) {
         },
     };
 
-    await axios.post(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`, payload, {
+    const { data } = await axios.post(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`, payload, {
         headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
         timeout: 20000,
     });
+    return { id: data?.messages?.[0]?.id || null };
 }
 
 // Sends an interactive "list" message — used for the post-resolution CSAT

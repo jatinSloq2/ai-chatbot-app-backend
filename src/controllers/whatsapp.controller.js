@@ -13,6 +13,7 @@ const handoverService = require("../services/handover.service");
 const analyticsService = require("../services/analytics.service");
 const whatsappSender = require("../services/whatsappSender.service");
 const storageService = require("../services/storage.service");
+const realtimeService = require("../services/realtime.service");
 const { getLanguageName } = require("../utils/i18n");
 const {
     looksLikeHandoverRequest,
@@ -106,6 +107,28 @@ const summarizeChange = (change) => {
     const status = value.statuses?.[0];
 
     if (message) {
+        // A visitor tapping an emoji reaction on one of our messages arrives
+        // here too (value.messages[0].type === "reaction") — it has no
+        // .text and isn't media, so without this it fell through to the
+        // generic text pipeline below, which saw an empty message and sent
+        // back "I can only read text messages right now — could you type
+        // that out for me?" in response to a 👍. Classified separately so
+        // it's just logged (see kind:"reaction" below) instead of
+        // triggering a confusing auto-reply.
+        if (message.type === "reaction") {
+            return {
+                kind: "reaction",
+                phoneNumberId: value.metadata?.phone_number_id || null,
+                from: message.from || null,
+                messageType: "reaction",
+                reactionEmoji: message.reaction?.emoji || null,
+                reactionToMessageId: message.reaction?.message_id || null,
+                preview: message.reaction?.emoji
+                    ? `reacted ${message.reaction.emoji} to ${message.reaction.message_id || "a message"}`
+                    : "removed a reaction",
+            };
+        }
+
         // Meta puts inbound media (image/document/audio/video/sticker) IDs
         // under a key that matches message.type — pull it out generically
         // rather than a big if/else chain of message.image?.id, etc.
@@ -229,6 +252,57 @@ const findOrCreateWhatsappConversation = async (bot, from) => {
  * "csat_<1-5>"; anything else is an interactive reply we don't recognise
  * (future button/list features) and is just logged.
  */
+// Meta's own status names -> our messageSchema.deliveryStatus enum. Meta
+// also sends "deleted" for messages a user removed on their end, which we
+// have no matching state for — treated as a no-op rather than an error.
+const WHATSAPP_STATUS_MAP = { sent: "sent", delivered: "delivered", read: "read", failed: "failed" };
+
+/**
+ * A "status" webhook change — Meta reporting sent/delivered/read/failed for
+ * a message WE sent out (an agent's reply, most commonly). Finds the exact
+ * Conversation.messages[] entry by its stored whatsappMessageId (the WAMID
+ * handed back when the message was originally relayed — see
+ * handover.service.js#relayToWhatsappIfNeeded) and updates its
+ * deliveryStatus in place, so the agent's chat view reflects reality
+ * instead of assuming every send just worked.
+ *
+ * Status webhooks can arrive out of order or repeat — "sent" after
+ * "delivered" is ignored rather than downgrading a message that's already
+ * further along, since Meta doesn't guarantee ordering.
+ */
+const STATUS_RANK = { pending: 0, sent: 1, delivered: 2, read: 3, failed: 4 };
+const handleStatusUpdate = async (status) => {
+    const waMessageId = status?.id;
+    const mappedStatus = WHATSAPP_STATUS_MAP[status?.status];
+    if (!waMessageId || !mappedStatus) return;
+
+    const conversation = await Conversation.findOne({ "messages.whatsappMessageId": waMessageId }).select(
+        "_id messages.$"
+    );
+    if (!conversation) return; // nothing on file for this WAMID — not one of ours, or too old
+    const message = conversation.messages[0];
+    if (!message) return;
+
+    // "failed" always wins regardless of rank (a delivered->failed webhook
+    // shouldn't happen per Meta's docs, but if it does, trust it) —
+    // otherwise only move forward, never backward.
+    if (mappedStatus !== "failed" && (STATUS_RANK[message.deliveryStatus] || 0) >= STATUS_RANK[mappedStatus]) {
+        return;
+    }
+
+    const errorDetail = status?.errors?.[0];
+    const deliveryError =
+        mappedStatus === "failed"
+            ? errorDetail?.title || errorDetail?.message || "WhatsApp reported this message as failed"
+            : null;
+
+    await Conversation.updateOne(
+        { _id: conversation._id, "messages._id": message._id },
+        { $set: { "messages.$.deliveryStatus": mappedStatus, "messages.$.deliveryError": deliveryError } }
+    );
+    realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
+};
+
 const handleInboundInteractive = async ({ phoneNumberId, from, replyId }) => {
     const resolved = await resolveBotForPhoneNumberId(phoneNumberId);
     if (!resolved) return;
@@ -671,8 +745,23 @@ const receiveWebhook = asyncHandler(async (req, res) => {
                     logger.error(`[whatsapp] Unhandled error processing message from ${summary.from}: ${err.message}`);
                 }
             }
-            // "status" (delivery/read receipts) and "unknown" changes are
-            // logged/stored above and otherwise ignored — nothing to reply to.
+            // "status" (delivery/read receipts) update the matching
+            // message's deliveryStatus (see handleStatusUpdate above).
+            // "reaction" (a 👍 etc. on one of our messages) is logged/
+            // stored above via WhatsAppEvent.raw only for now — nothing
+            // reads reactionEmoji/reactionToMessageId yet, but the data
+            // isn't lost if/when that's wanted (e.g. showing the emoji next
+            // to the reacted-to message in the agent view).
+            // "unknown" changes are logged/stored above and otherwise
+            // ignored — nothing to reply to.
+            if (summary.kind === "status") {
+                const status = change?.value?.statuses?.[0];
+                try {
+                    await handleStatusUpdate(status);
+                } catch (err) {
+                    logger.error(`[whatsapp] Failed to process status update for ${summary.from}: ${err.message}`);
+                }
+            }
         }
     }
 });

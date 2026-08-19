@@ -16,7 +16,7 @@ const whatsAppEventSchema = new mongoose.Schema(
         // save time purely for easy filtering/searching, not from the API.
         kind: {
             type: String,
-            enum: ["message", "status", "unknown"],
+            enum: ["message", "status", "reaction", "unknown"],
             default: "unknown",
             index: true,
         },
