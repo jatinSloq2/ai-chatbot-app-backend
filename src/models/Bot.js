@@ -154,6 +154,51 @@ const botSchema = new mongoose.Schema(
       credentialId: { type: mongoose.Schema.Types.ObjectId, ref: "IntegrationCredential", default: null },
     },
 
+    // --- Functional tools (unified support / orders / bookings toolkit) ---
+    // Backs the "Chatbot Master Spec" unified tools — one Google Sheet (see
+    // IntegrationCredential.googleSheets + services/googleSheets.service.js)
+    // with Items/Availability/Orders/Users/Payments/Tickets tabs powers
+    // catalog browsing, order/booking creation, and support tickets, all
+    // through the same tool set (services/botTools.service.js). Which
+    // tools are exposed to the LLM is derived from `purposes` unless
+    // `enabledTools` is set explicitly. Tool-calling itself only works
+    // when llmConfig.provider is one that supports function calling
+    // (openai/groq/mistral/anthropic) — see llm.service.js#TOOL_CAPABLE_PROVIDERS.
+    toolsConfig: {
+      enabled: { type: Boolean, default: false },
+      purposes: {
+        type: [String],
+        enum: ["support", "orders", "bookings"],
+        default: [],
+      },
+      // Points at an IntegrationCredential with channel:"google_sheets" —
+      // the single spreadsheet this bot's tools read/write.
+      sheetsCredentialId: { type: mongoose.Schema.Types.ObjectId, ref: "IntegrationCredential", default: null },
+      // Points at an IntegrationCredential with channel:"razorpay" — when
+      // set, create_payment_link/verify_payment_status/initiate_refund take
+      // real payments through the owner's own Razorpay account via Payment
+      // Links (see razorpay.service.js + botTools.service.js). When unset,
+      // those tools just log a pending-payment row and show
+      // paymentInstructions instead — no money actually moves.
+      razorpayCredentialId: { type: mongoose.Schema.Types.ObjectId, ref: "IntegrationCredential", default: null },
+      // Optional manual override of the exact tool names exposed to the
+      // LLM. Empty = derive automatically from `purposes` (recommended).
+      enabledTools: { type: [String], default: [] },
+      // Safety cap on how many tool-call ↔ tool-result round trips a
+      // single reply can go through before we force a final answer.
+      maxToolIterations: { type: Number, default: 4, min: 1, max: 8 },
+      // Shown to the visitor in place of a real payment link when
+      // create_payment_link fires and no Razorpay account is connected
+      // (razorpayCredentialId unset) — just a logged pending-payment row on
+      // the Payments tab in that case (see botTools.service.js). Free text
+      // so an owner can say "we'll send a UPI/payment link over WhatsApp
+      // shortly" or similar, until they connect Razorpay for real checkout.
+      paymentInstructions: {
+        type: String,
+        default: "We've noted this order as pending payment — our team will share payment details shortly.",
+      },
+    },
+
     // --- Human agent handover (Agent System) ---
     // Which agents/teams can be handed a conversation on this bot, and
     // whether handover is offered at all. The actual handover trigger logic

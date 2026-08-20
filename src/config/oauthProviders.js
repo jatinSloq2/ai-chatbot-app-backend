@@ -36,7 +36,20 @@ const MICROSOFT = {
     scope: ["openid", "email", "profile", "offline_access", "Mail.Send"].join(" "),
 };
 
-const PROVIDERS = { google: GOOGLE, microsoft: MICROSOFT };
+const GOOGLE_SHEETS = {
+  clientId: process.env.GOOGLE_CLIENT_ID, // same GCP OAuth client as email — different scope/redirect URI
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+  redirectUri: process.env.GOOGLE_SHEETS_REDIRECT_URI, // e.g. https://api.yourapp.com/api/oauth/google-sheets/callback
+  authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+  tokenUrl: "https://oauth2.googleapis.com/token",
+  userInfoUrl: "https://www.googleapis.com/oauth2/v3/userinfo",
+  // "spreadsheets" alone is enough to create AND read/write any sheet the
+  // signed-in Google account can open — no Picker/drive.file dance needed,
+  // the user just pastes a URL for an existing sheet they own/can edit.
+  scope: ["openid", "email", "profile", "https://www.googleapis.com/auth/spreadsheets"].join(" "),
+};
+
+const PROVIDERS = { google: GOOGLE, microsoft: MICROSOFT, google_sheets: GOOGLE_SHEETS };
 
 function getProviderConfig(provider) {
     const cfg = PROVIDERS[provider];

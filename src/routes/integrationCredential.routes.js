@@ -20,6 +20,10 @@ router.post("/email/api", credentialController.createEmailApi);
 router.post("/whatsapp", credentialController.createWhatsapp);
 router.post("/sms", credentialController.createSms);
 router.post("/ai-provider", credentialController.createAiProvider);
+router.post("/google-sheets", credentialController.createGoogleSheets);
+router.post("/google-sheets/:id/create-sheet", credentialController.createSheetForCredential);
+router.post("/google-sheets/:id/attach-sheet", credentialController.attachSheetForCredential);
+router.post("/razorpay", credentialController.createRazorpay);
 
 router.patch("/:id", credentialController.updateCredential);
 router.patch("/:id/set-default", credentialController.setDefault);

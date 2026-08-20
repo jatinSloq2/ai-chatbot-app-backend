@@ -224,11 +224,49 @@ async function testAiProvider(cred) {
   throw new Error("Live test isn't supported for this provider yet — credential was saved");
 }
 
+// ---------------- GOOGLE SHEETS ----------------
+
+async function testGoogleSheets(cred) {
+  const g = cred.googleSheets || {};
+  const googleSheetsService = require("./googleSheets.service");
+
+  if (g.method === "oauth") {
+    if (!g.spreadsheetId) {
+      throw new Error("No sheet chosen yet — create a new one or attach an existing one first");
+    }
+    const googleSheetsOauthService = require("./googleSheetsOauth.service");
+    const accessToken = await googleSheetsOauthService.getValidAccessToken(cred);
+    await googleSheetsService.ensureSheetStructure(accessToken, g.spreadsheetId);
+    return;
+  }
+
+  if (!g.spreadsheetId || !g.serviceAccountJson) {
+    throw new Error("Spreadsheet ID/URL and service account JSON are both required");
+  }
+  const { accessToken, spreadsheetId } = await googleSheetsService.authFromCredential(g);
+  // Also creates any missing Items/Availability/Orders/Users/Payments/Tickets
+  // tabs + header rows — this is the moment a brand-new sheet gets set up.
+  await googleSheetsService.ensureSheetStructure(accessToken, spreadsheetId);
+}
+
+// ---------------- RAZORPAY ----------------
+
+async function testRazorpay(cred) {
+  const r = cred.razorpay || {};
+  if (!r.keyId || !r.keySecret) throw new Error("Key ID and Key Secret are both required");
+  const razorpayService = require("./razorpay.service");
+  // A cheap authenticated call — fails clearly (401) on bad keys without
+  // creating/touching anything.
+  await razorpayService.getClient(r.keyId, r.keySecret).orders.all({ count: 1 });
+}
+
 async function runConnectionTest(cred) {
   if (cred.channel === "email") return testEmail(cred);
   if (cred.channel === "whatsapp") return testWhatsapp(cred);
   if (cred.channel === "sms") return testSms(cred);
   if (cred.channel === "ai_provider") return testAiProvider(cred);
+  if (cred.channel === "google_sheets") return testGoogleSheets(cred);
+  if (cred.channel === "razorpay") return testRazorpay(cred);
   throw new Error("Unknown channel");
 }
 

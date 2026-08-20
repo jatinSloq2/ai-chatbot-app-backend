@@ -2,7 +2,13 @@ const IntegrationCredential = require("../models/IntegrationCredential");
 const ApiError = require("../utils/ApiError");
 const { runConnectionTest } = require("./integrationTest.service");
 
-const CHANNEL_FIELD = { email: "email", whatsapp: "whatsapp", sms: "sms", ai_provider: "aiProvider" };
+const CHANNEL_FIELD = {
+  email: "email",
+  whatsapp: "whatsapp",
+  sms: "sms",
+  ai_provider: "aiProvider",
+  google_sheets: "googleSheets",
+};
 
 const getOwnedCredential = async (id, userId) => {
   const cred = await IntegrationCredential.findOne({ _id: id, user: userId });
@@ -24,9 +30,29 @@ const clearOtherDefaults = async (userId, channel, keepId) => {
   );
 };
 
+// Normalizes a pasted spreadsheet URL/ID down to just the ID, and pulls the
+// service account's email out of the pasted JSON key so the UI can show
+// "share your sheet with this address" without re-parsing it every render.
+const normalizeGoogleSheetsPayload = (payload) => {
+  if (!payload) return payload;
+  const googleSheetsService = require("./googleSheets.service");
+  const out = { ...payload };
+  if (out.spreadsheetId) {
+    out.spreadsheetUrl = out.spreadsheetUrl || out.spreadsheetId;
+    out.spreadsheetId = googleSheetsService.extractSpreadsheetId(out.spreadsheetId);
+  }
+  if (out.serviceAccountJson) {
+    const account = googleSheetsService.parseServiceAccount(out.serviceAccountJson);
+    out.serviceAccountEmail = account.client_email;
+  }
+  return out;
+};
+
 const createCredential = async ({ userId, channel, label, payload, isDefault }) => {
   const field = CHANNEL_FIELD[channel];
   if (!field) throw new ApiError(400, "Invalid channel");
+
+  if (channel === "google_sheets") payload = normalizeGoogleSheetsPayload(payload);
 
   const cred = await IntegrationCredential.create({
     user: userId,
@@ -52,6 +78,7 @@ const updateCredential = async (id, userId, { label, payload, isActive, isDefaul
   if (isActive !== undefined) cred.isActive = isActive;
 
   if (payload && typeof payload === "object") {
+    if (cred.channel === "google_sheets") payload = normalizeGoogleSheetsPayload(payload);
     const current = cred[field]?.toObject ? cred[field].toObject({ getters: true }) : cred[field] || {};
     const merged = mergeDeep(current, payload);
     cred[field] = merged;
@@ -117,6 +144,7 @@ const testConnection = async (id, userId) => {
   const cred = await getOwnedCredential(id, userId);
   try {
     await runConnectionTest(cred);
+    if (cred.channel === "google_sheets") cred.googleSheets.tabsInitialized = true;
     await cred.markVerified();
   } catch (err) {
     const message =

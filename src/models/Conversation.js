@@ -112,6 +112,11 @@ const conversationSchema = new mongoose.Schema(
       // "hi", "es"). Drives both the widget's UI strings and an instruction
       // appended to the AI's system prompt to reply in this language.
       language: { type: String, default: "en" },
+      // user_id row in the connected Google Sheet's Users tab (see
+      // botTools.service.js#capture_user_info / get_user_profile) — set the
+      // first time this conversation's visitor is captured/looked up there,
+      // so later tool calls in the same conversation don't re-create them.
+      sheetUserId: { type: String, default: null },
     },
 
     messages: { type: [messageSchema], default: [] },

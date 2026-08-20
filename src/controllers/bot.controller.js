@@ -32,6 +32,7 @@ const sanitizeBot = (bot) => ({
   agentConfig: bot.agentConfig,
   businessHours: bot.businessHours,
   whatsappConfig: bot.whatsappConfig,
+  toolsConfig: bot.toolsConfig,
   isActive: bot.isActive,
   documentCount: bot.documentCount,
   messagesThisMonth: bot.messagesThisMonth,
@@ -384,6 +385,77 @@ const setWhatsappChannel = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
 });
 
+// POST /api/bots/:id/tools-config
+// body: { enabled?, purposes? (["support","orders","bookings"]), sheetsCredentialId?, enabledTools?, maxToolIterations?, paymentInstructions? }
+// Turns on the unified support/orders/bookings tool kit for this bot,
+// pointing it at one connected Google Sheet. See services/botTools.service.js
+// and services/toolOrchestrator.service.js for how it's actually run.
+const setToolsConfig = asyncHandler(async (req, res) => {
+  const { enabled, purposes, sheetsCredentialId, razorpayCredentialId, enabledTools, maxToolIterations, paymentInstructions } = req.body;
+
+  const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
+  if (!bot) throw new ApiError(404, "Bot not found");
+
+  if (purposes !== undefined) {
+    const valid = ["support", "orders", "bookings"];
+    if (!Array.isArray(purposes) || purposes.some((p) => !valid.includes(p))) {
+      throw new ApiError(400, `purposes must be a subset of: ${valid.join(", ")}`);
+    }
+    bot.toolsConfig.purposes = purposes;
+  }
+
+  if (sheetsCredentialId !== undefined) {
+    if (sheetsCredentialId) {
+      const IntegrationCredential = require("../models/IntegrationCredential");
+      const cred = await IntegrationCredential.findOne({
+        _id: sheetsCredentialId,
+        user: req.user._id,
+        channel: "google_sheets",
+      });
+      if (!cred) throw new ApiError(404, "Google Sheets credential not found");
+    }
+    bot.toolsConfig.sheetsCredentialId = sheetsCredentialId || null;
+  }
+
+  if (razorpayCredentialId !== undefined) {
+    if (razorpayCredentialId) {
+      const IntegrationCredential = require("../models/IntegrationCredential");
+      const cred = await IntegrationCredential.findOne({
+        _id: razorpayCredentialId,
+        user: req.user._id,
+        channel: "razorpay",
+      });
+      if (!cred) throw new ApiError(404, "Razorpay credential not found");
+    }
+    bot.toolsConfig.razorpayCredentialId = razorpayCredentialId || null;
+  }
+
+  if (enabledTools !== undefined) {
+    if (!Array.isArray(enabledTools)) throw new ApiError(400, "enabledTools must be an array of tool names");
+    bot.toolsConfig.enabledTools = enabledTools;
+  }
+
+  if (maxToolIterations !== undefined) bot.toolsConfig.maxToolIterations = Number(maxToolIterations) || 4;
+  if (paymentInstructions !== undefined) bot.toolsConfig.paymentInstructions = paymentInstructions;
+
+  if (enabled !== undefined) {
+    if (enabled) {
+      if (!bot.toolsConfig.purposes?.length) {
+        throw new ApiError(400, "Pick at least one of support / orders / bookings before enabling tools");
+      }
+      // Every purpose (including support-only) uses at least the Users/
+      // Tickets tabs, so a connected sheet is always required to enable tools.
+      if (!bot.toolsConfig.sheetsCredentialId) {
+        throw new ApiError(400, "Connect a Google Sheet before enabling tools");
+      }
+    }
+    bot.toolsConfig.enabled = !!enabled;
+  }
+
+  await bot.save();
+  res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
+});
+
 module.exports = {
   createBot,
   listBots,
@@ -397,4 +469,5 @@ module.exports = {
   setBusinessHours,
   setLanguageConfig,
   setWhatsappChannel,
+  setToolsConfig,
 };

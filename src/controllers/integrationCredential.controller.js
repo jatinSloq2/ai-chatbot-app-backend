@@ -15,6 +15,8 @@ const SECRET_PATHS = {
   whatsapp: ["whatsapp.accessToken", "whatsapp.webhookVerifyToken", "whatsapp.appSecret"],
   sms: ["sms.apiKey", "sms.authToken", "sms.accessKeyId", "sms.secretAccessKey"],
   ai_provider: ["aiProvider.apiKey", "aiProvider.serviceAccountJson"],
+  google_sheets: ["googleSheets.serviceAccountJson", "googleSheets.oauth.accessToken", "googleSheets.oauth.refreshToken"],
+  razorpay: ["razorpay.keySecret", "razorpay.webhookSecret"],
 };
 
 function getPath(obj, path) {
@@ -59,6 +61,8 @@ const sanitizeCredential = (doc) => {
     whatsapp: cred.whatsapp,
     sms: cred.sms,
     aiProvider: cred.aiProvider,
+    googleSheets: cred.googleSheets,
+    razorpay: cred.razorpay,
     hasSecrets, // lets the frontend show "a key is saved" without ever seeing it
     createdAt: cred.createdAt,
     updatedAt: cred.updatedAt,
@@ -190,6 +194,72 @@ const createAiProvider = createFor("ai_provider", [
   "defaultModel",
 ]);
 
+// POST /api/credentials/google-sheets
+// body: { label?, isDefault?, spreadsheetId (URL or bare ID), serviceAccountJson }
+// Advanced/legacy path — pastes a service-account JSON key directly. Most
+// users should use the "Connect Google" OAuth flow instead (see
+// oauth.controller.js#initGoogleSheets + createSheet/attachSheet below).
+const createGoogleSheets = asyncHandler(async (req, res) => {
+  const { label, isDefault, spreadsheetId, serviceAccountJson } = req.body;
+  if (!spreadsheetId?.trim() || !serviceAccountJson?.trim()) {
+    throw new ApiError(400, "spreadsheetId (URL or ID) and serviceAccountJson are both required");
+  }
+  const cred = await credentialService.createCredential({
+    userId: req.user._id,
+    channel: "google_sheets",
+    label,
+    isDefault,
+    payload: { method: "service_account", spreadsheetId, serviceAccountJson },
+  });
+  res.status(201).json({ success: true, data: { credential: sanitizeCredential(cred) } });
+});
+
+// POST /api/credentials/google-sheets/:id/create-sheet
+// body: { title? } — the "Create a new sheet" follow-up after OAuth connect.
+const createSheetForCredential = asyncHandler(async (req, res) => {
+  const IntegrationCredential = require("../models/IntegrationCredential");
+  const sheetsOauthService = require("../services/googleSheetsOauth.service");
+
+  const cred = await IntegrationCredential.findOne({ _id: req.params.id, user: req.user._id, channel: "google_sheets" });
+  if (!cred) throw new ApiError(404, "Credential not found");
+  if (cred.googleSheets?.method !== "oauth") throw new ApiError(400, "This action is only for Google-connected sheets");
+
+  await sheetsOauthService.createSpreadsheet(cred, req.body?.title);
+  res.status(200).json({ success: true, data: { credential: sanitizeCredential(cred) } });
+});
+
+// POST /api/credentials/google-sheets/:id/attach-sheet
+// body: { spreadsheetId (URL or bare ID) } — "Use an existing sheet" follow-up.
+const attachSheetForCredential = asyncHandler(async (req, res) => {
+  const IntegrationCredential = require("../models/IntegrationCredential");
+  const sheetsOauthService = require("../services/googleSheetsOauth.service");
+
+  const cred = await IntegrationCredential.findOne({ _id: req.params.id, user: req.user._id, channel: "google_sheets" });
+  if (!cred) throw new ApiError(404, "Credential not found");
+  if (cred.googleSheets?.method !== "oauth") throw new ApiError(400, "This action is only for Google-connected sheets");
+  if (!req.body?.spreadsheetId?.trim()) throw new ApiError(400, "spreadsheetId (URL or ID) is required");
+
+  await sheetsOauthService.attachSpreadsheet(cred, req.body.spreadsheetId);
+  res.status(200).json({ success: true, data: { credential: sanitizeCredential(cred) } });
+});
+
+// POST /api/credentials/razorpay
+// body: { label?, isDefault?, keyId, keySecret, webhookSecret? }
+const createRazorpay = asyncHandler(async (req, res) => {
+  const { label, isDefault, keyId, keySecret, webhookSecret } = req.body;
+  if (!keyId?.trim() || !keySecret?.trim()) {
+    throw new ApiError(400, "keyId and keySecret are both required");
+  }
+  const cred = await credentialService.createCredential({
+    userId: req.user._id,
+    channel: "razorpay",
+    label,
+    isDefault,
+    payload: { keyId, keySecret, webhookSecret },
+  });
+  res.status(201).json({ success: true, data: { credential: sanitizeCredential(cred) } });
+});
+
 // PATCH /api/credentials/:id  — generic update (label, isActive, isDefault, channel fields)
 const updateCredential = asyncHandler(async (req, res) => {
   const { label, isActive, isDefault, ...rest } = req.body;
@@ -228,6 +298,10 @@ module.exports = {
   createWhatsapp,
   createSms,
   createAiProvider,
+  createGoogleSheets,
+  createSheetForCredential,
+  attachSheetForCredential,
+  createRazorpay,
   updateCredential,
   setDefault,
   deleteCredential,

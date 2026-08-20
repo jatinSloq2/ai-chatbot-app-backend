@@ -150,13 +150,63 @@ const AiProviderCredentialSchema = new Schema(
   { _id: false }
 );
 
+// ---------- GOOGLE SHEETS (unified tools data layer — Items/Availability/
+// Orders/Users/Payments/Tickets tabs, see services/googleSheets.service.js) ----------
+const GoogleSheetsCredentialSchema = new Schema(
+  {
+    // "oauth" (recommended — same "Connect Google" flow as Gmail, pick or
+    // create a sheet afterwards) or "service_account" (advanced/legacy —
+    // paste a GCP service account JSON key and share the sheet with it).
+    method: { type: String, enum: ["oauth", "service_account"], default: "oauth" },
+
+    // The Sheet the bot's tools read/write. Set after connecting, once the
+    // user creates a new sheet or attaches an existing one. Pasted as a
+    // full URL or bare ID — normalized down to just the ID at save time.
+    spreadsheetId: { type: String, trim: true },
+    spreadsheetUrl: { type: String, trim: true }, // kept as originally pasted/created, for an "open sheet" link in the UI
+
+    // --- method: "oauth" ---
+    oauth: {
+      email: { type: String, trim: true, lowercase: true }, // which Google account was connected
+      accessToken: secretField,
+      refreshToken: secretField,
+      tokenExpiry: { type: Date },
+    },
+
+    // --- method: "service_account" ---
+    // Google service-account JSON key (downloaded from GCP console). Must be
+    // shared as an Editor on the target Sheet. Stored encrypted; the bot
+    // backend exchanges it for a short-lived OAuth2 access token per request
+    // (see googleSheets.service.js#getAccessToken) — never stored/reused raw.
+    serviceAccountJson: secretField,
+    serviceAccountEmail: { type: String, trim: true }, // parsed out of the JSON, shown in the UI as "share the sheet with this address"
+
+    // Set true once list_items/Items/Availability/Orders/Users/Payments/
+    // Tickets tabs + header rows have been created/verified on the sheet.
+    tabsInitialized: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
+// ---------- RAZORPAY (per-bot real payments — Payment Links + refunds) ----------
+const RazorpayCredentialSchema = new Schema(
+  {
+    keyId: { type: String, trim: true, required: true }, // not secret — safe to echo back, needed client-side for some flows
+    keySecret: secretField,
+    // Optional — only needed if/when a webhook is configured on this account
+    // for real-time payment confirmation (see razorpay.service.js).
+    webhookSecret: secretField,
+  },
+  { _id: false }
+);
+
 const IntegrationCredentialSchema = new Schema(
   {
     user: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
 
     channel: {
       type: String,
-      enum: ["email", "whatsapp", "sms", "ai_provider"],
+      enum: ["email", "whatsapp", "sms", "ai_provider", "google_sheets", "razorpay"],
       required: true,
       index: true,
     },
@@ -170,6 +220,8 @@ const IntegrationCredentialSchema = new Schema(
     whatsapp: WhatsappCredentialSchema,
     sms: SmsCredentialSchema,
     aiProvider: AiProviderCredentialSchema,
+    googleSheets: GoogleSheetsCredentialSchema,
+    razorpay: RazorpayCredentialSchema,
 
     status: {
       type: String,
@@ -187,7 +239,14 @@ const IntegrationCredentialSchema = new Schema(
 );
 
 IntegrationCredentialSchema.pre("validate", function (next) {
-  const channelFieldMap = { email: "email", whatsapp: "whatsapp", sms: "sms", ai_provider: "aiProvider" };
+  const channelFieldMap = {
+    email: "email",
+    whatsapp: "whatsapp",
+    sms: "sms",
+    ai_provider: "aiProvider",
+    google_sheets: "googleSheets",
+    razorpay: "razorpay",
+  };
   const requiredField = channelFieldMap[this.channel];
   if (!this[requiredField]) {
     return next(new Error(`Missing "${requiredField}" data for channel "${this.channel}"`));
