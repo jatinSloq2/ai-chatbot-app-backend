@@ -8,10 +8,12 @@ const { protect } = require("../middlewares/auth.middleware");
 // not fetch/axios) from the "Connect Gmail" button, so the httpOnly
 // accessToken cookie rides along and `protect` resolves req.user normally.
 router.get("/google/init", protect, oauthController.initGoogle);
+router.get("/google-sheets/init", protect, oauthController.initGoogleSheets);
 
 // Callback is hit by Google redirecting the browser back to us — no auth
 // cookie context expected/required here, identity comes from the signed
 // `state` param instead (see emailOauth.service.js).
 router.get("/google/callback", oauthController.callbackGoogle);
+router.get("/google-sheets/callback", oauthController.callbackGoogleSheets);
 
 module.exports = router;
