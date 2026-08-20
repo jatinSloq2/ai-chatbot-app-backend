@@ -39,7 +39,7 @@ const MICROSOFT = {
 const GOOGLE_SHEETS = {
   clientId: process.env.GOOGLE_CLIENT_ID, // same GCP OAuth client as email — different scope/redirect URI
   clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-  redirectUri: process.env.GOOGLE_SHEETS_REDIRECT_URI, // e.g. https://api.yourapp.com/api/oauth/google-sheets/callback
+  redirectUri: process.env.GOOGLE_REDIRECT_URI, // e.g. https://api.yourapp.com/api/oauth/google-sheets/callback
   authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
   tokenUrl: "https://oauth2.googleapis.com/token",
   userInfoUrl: "https://www.googleapis.com/oauth2/v3/userinfo",
