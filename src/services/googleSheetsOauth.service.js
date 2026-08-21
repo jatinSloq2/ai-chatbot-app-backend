@@ -1,21 +1,18 @@
-const emailOauthService = require("./emailOauth.service"); // reuses its generic signState/verifyState/buildAuthUrl/exchangeCodeForTokens/refreshAccessToken — none of those are actually email-specific
 const IntegrationCredential = require("../models/IntegrationCredential");
 const googleSheetsService = require("./googleSheets.service");
 const ApiError = require("../utils/ApiError");
+const emailOauthService = require("./emailOauth.service"); // for refreshAccessToken only — token exchange itself happens once, in oauth.controller.js's single "google" callback
 
-const { signState, verifyState, exchangeCodeForTokens, refreshAccessToken } = emailOauthService;
-
-const buildAuthUrl = (userId) => emailOauthService.buildAuthUrl("google_sheets", userId);
-
-const fetchProfileEmail = (accessToken) => emailOauthService.fetchProfileEmail("google_sheets", accessToken);
-
-// Step 4 (mirrors emailOauth.service.js#upsertOauthCredential): after a
-// successful callback, save (or update) the credential. One OAuth
-// credential per (user, connected Google account) for this channel —
-// reconnecting the same account updates tokens in place. No spreadsheetId
-// yet at this point — that's chosen in a follow-up step (createSpreadsheet
-// or attachSpreadsheet below), same as picking a mailbox is separate from
-// connecting Gmail.
+// Step 4 (mirrors emailOauth.service.js#upsertOauthCredential, targeting
+// credential.googleSheets instead of credential.email): called right after
+// the *same* "Connect Google" callback that connects Gmail — both channels
+// are populated from the one token exchange, since the single consent
+// screen now asks for both gmail.send and spreadsheets scopes together (see
+// config/oauthProviders.js). One Google account can only be attached to one
+// Sheets credential per user; reconnecting updates tokens in place. No
+// spreadsheetId yet at this point — that's chosen in a follow-up step
+// (createSpreadsheet/attachSpreadsheet below), same as picking a mailbox is
+// separate from connecting Gmail.
 const upsertOauthCredential = async ({ userId, tokenData, email }) => {
     const oauthPayload = {
         email,
@@ -57,6 +54,9 @@ const upsertOauthCredential = async ({ userId, tokenData, email }) => {
 
 // Mirrors emailOauth.service.js#getValidAccessToken, targeting
 // credentialDoc.googleSheets.oauth instead of credentialDoc.email.oauth.
+// Google issues one token per grant, so a refresh here uses the exact same
+// refreshAccessToken("google", ...) call the email side uses — it's the
+// same OAuth client/grant, just stored under a different credential doc.
 const getValidAccessToken = async (credentialDoc) => {
     const oauth = credentialDoc.googleSheets?.oauth;
     if (!oauth?.accessToken) throw new ApiError(400, "No access token stored for this Google Sheets connection");
@@ -73,7 +73,7 @@ const getValidAccessToken = async (credentialDoc) => {
 
     let tokenData;
     try {
-        tokenData = await refreshAccessToken("google_sheets", oauth.refreshToken);
+        tokenData = await emailOauthService.refreshAccessToken("google", oauth.refreshToken);
     } catch (err) {
         const code = err?.response?.data?.error;
         if (code === "invalid_grant") {
@@ -123,11 +123,6 @@ const attachSpreadsheet = async (credentialDoc, spreadsheetIdOrUrl) => {
 };
 
 module.exports = {
-    buildAuthUrl,
-    signState,
-    verifyState,
-    exchangeCodeForTokens,
-    fetchProfileEmail,
     upsertOauthCredential,
     getValidAccessToken,
     createSpreadsheet,

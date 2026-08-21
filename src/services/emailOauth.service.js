@@ -9,8 +9,8 @@ const IntegrationCredential = require("../models/IntegrationCredential");
 // the request genuinely originated from our own /init redirect (CSRF guard).
 const STATE_SECRET = () => process.env.OAUTH_STATE_SECRET || process.env.JWT_ACCESS_SECRET;
 
-function signState(userId) {
-  return jwt.sign({ userId }, STATE_SECRET(), { expiresIn: "10m" });
+function signState(userId, extra) {
+  return jwt.sign({ userId, ...extra }, STATE_SECRET(), { expiresIn: "10m" });
 }
 
 function verifyState(state) {
@@ -21,15 +21,19 @@ function verifyState(state) {
   }
 }
 
-// Step 1: build the URL we redirect the user's browser to.
-function buildAuthUrl(provider, userId) {
+// Step 1: build the URL we redirect the user's browser to. `extra` (e.g.
+// { intent: "sheets" }) rides through the signed state param and comes back
+// unchanged in the callback — lets one OAuth flow serve more than one
+// "Connect Google" entry point (Email tab vs. Google Sheets tab) and land
+// the user back on the right one, without needing a second provider/flow.
+function buildAuthUrl(provider, userId, extra) {
   const cfg = getProviderConfig(provider);
   const params = new URLSearchParams({
     client_id: cfg.clientId,
     redirect_uri: cfg.redirectUri,
     response_type: "code",
     scope: cfg.scope,
-    state: signState(userId),
+    state: signState(userId, extra),
     access_type: "offline", // ask Google for a refresh_token
     prompt: "consent", // force the consent screen so we actually get one back
   });
