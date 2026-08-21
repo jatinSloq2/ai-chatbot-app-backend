@@ -144,7 +144,13 @@ const testConnection = async (id, userId) => {
   const cred = await getOwnedCredential(id, userId);
   try {
     await runConnectionTest(cred);
-    if (cred.channel === "google_sheets") cred.googleSheets.tabsInitialized = true;
+    // For the service_account method this is the single sheet's flag; for
+    // oauth, each sheet's own tabsInitialized is set individually when it's
+    // created/attached (see googleSheetsOauth.service.js) — nothing to flip
+    // here, "test connection" for oauth just confirms the account token works.
+    if (cred.channel === "google_sheets" && cred.googleSheets.method === "service_account") {
+      cred.googleSheets.tabsInitialized = true;
+    }
     await cred.markVerified();
   } catch (err) {
     const message =

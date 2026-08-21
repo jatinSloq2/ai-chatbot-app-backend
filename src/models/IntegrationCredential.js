@@ -150,20 +150,29 @@ const AiProviderCredentialSchema = new Schema(
   { _id: false }
 );
 
+// One connected/created spreadsheet under an OAuth-connected Google account.
+// A single Google account can power many bots, each pointed at a different
+// sheet — so this lives in an array on the credential, not a single field.
+const GoogleSheetEntrySchema = new Schema(
+  {
+    label: { type: String, trim: true }, // editable in the UI — "Main store", "Safari bookings", etc.
+    spreadsheetId: { type: String, trim: true, required: true },
+    spreadsheetUrl: { type: String, trim: true },
+    tabsInitialized: { type: Boolean, default: false },
+    connectedAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 // ---------- GOOGLE SHEETS (unified tools data layer — Items/Availability/
 // Orders/Users/Payments/Tickets tabs, see services/googleSheets.service.js) ----------
 const GoogleSheetsCredentialSchema = new Schema(
   {
-    // "oauth" (recommended — same "Connect Google" flow as Gmail, pick or
-    // create a sheet afterwards) or "service_account" (advanced/legacy —
-    // paste a GCP service account JSON key and share the sheet with it).
+    // "oauth" (recommended — the same "Connect Google" flow/credential as
+    // Email; one Google account, any number of sheets underneath it) or
+    // "service_account" (advanced/legacy — paste a GCP service account JSON
+    // key and share one sheet with it; one credential = one sheet).
     method: { type: String, enum: ["oauth", "service_account"], default: "oauth" },
-
-    // The Sheet the bot's tools read/write. Set after connecting, once the
-    // user creates a new sheet or attaches an existing one. Pasted as a
-    // full URL or bare ID — normalized down to just the ID at save time.
-    spreadsheetId: { type: String, trim: true },
-    spreadsheetUrl: { type: String, trim: true }, // kept as originally pasted/created, for an "open sheet" link in the UI
 
     // --- method: "oauth" ---
     oauth: {
@@ -172,17 +181,22 @@ const GoogleSheetsCredentialSchema = new Schema(
       refreshToken: secretField,
       tokenExpiry: { type: Date },
     },
+    // Every spreadsheet this Google account has created/attached through us.
+    // A bot picks one entry's spreadsheetId (Bot.toolsConfig.spreadsheetId)
+    // — the credential itself just holds the shared OAuth tokens.
+    sheets: [GoogleSheetEntrySchema],
 
     // --- method: "service_account" ---
     // Google service-account JSON key (downloaded from GCP console). Must be
-    // shared as an Editor on the target Sheet. Stored encrypted; the bot
-    // backend exchanges it for a short-lived OAuth2 access token per request
-    // (see googleSheets.service.js#getAccessToken) — never stored/reused raw.
+    // shared as an Editor on the target Sheet. One credential = one sheet —
+    // for more, add another service-account credential. Stored encrypted;
+    // the bot backend exchanges it for a short-lived OAuth2 access token per
+    // request (see googleSheets.service.js#getAccessToken) — never
+    // stored/reused raw.
+    spreadsheetId: { type: String, trim: true },
+    spreadsheetUrl: { type: String, trim: true },
     serviceAccountJson: secretField,
     serviceAccountEmail: { type: String, trim: true }, // parsed out of the JSON, shown in the UI as "share the sheet with this address"
-
-    // Set true once list_items/Items/Availability/Orders/Users/Payments/
-    // Tickets tabs + header rows have been created/verified on the sheet.
     tabsInitialized: { type: Boolean, default: false },
   },
   { _id: false }

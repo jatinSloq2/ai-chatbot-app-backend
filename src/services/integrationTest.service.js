@@ -231,12 +231,12 @@ async function testGoogleSheets(cred) {
   const googleSheetsService = require("./googleSheets.service");
 
   if (g.method === "oauth") {
-    if (!g.spreadsheetId) {
-      throw new Error("No sheet chosen yet — create a new one or attach an existing one first");
-    }
+    // "Test connection" here just confirms the Google account's token is
+    // still valid (refreshing it if needed) — an individual sheet's health
+    // is checked separately whenever it's created/attached, and again on
+    // its bot's first tool call.
     const googleSheetsOauthService = require("./googleSheetsOauth.service");
-    const accessToken = await googleSheetsOauthService.getValidAccessToken(cred);
-    await googleSheetsService.ensureSheetStructure(accessToken, g.spreadsheetId);
+    await googleSheetsOauthService.getValidAccessToken(cred);
     return;
   }
 

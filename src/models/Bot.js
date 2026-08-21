@@ -172,8 +172,14 @@ const botSchema = new mongoose.Schema(
         default: [],
       },
       // Points at an IntegrationCredential with channel:"google_sheets" —
-      // the single spreadsheet this bot's tools read/write.
+      // the connected Google account (or service-account credential) this
+      // bot's tools use.
       sheetsCredentialId: { type: mongoose.Schema.Types.ObjectId, ref: "IntegrationCredential", default: null },
+      // Which spreadsheet under that credential this bot actually reads/
+      // writes — required when the credential is OAuth-based (one account
+      // can back many sheets, this is how a bot picks its own). Not needed
+      // for a service_account credential, which is always exactly one sheet.
+      spreadsheetId: { type: String, default: null },
       // Points at an IntegrationCredential with channel:"razorpay" — when
       // set, create_payment_link/verify_payment_status/initiate_refund take
       // real payments through the owner's own Razorpay account via Payment

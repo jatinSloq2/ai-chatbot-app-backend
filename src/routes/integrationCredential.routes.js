@@ -23,6 +23,8 @@ router.post("/ai-provider", credentialController.createAiProvider);
 router.post("/google-sheets", credentialController.createGoogleSheets);
 router.post("/google-sheets/:id/create-sheet", credentialController.createSheetForCredential);
 router.post("/google-sheets/:id/attach-sheet", credentialController.attachSheetForCredential);
+router.patch("/google-sheets/:id/sheets/:sheetId", credentialController.renameSheetForCredential);
+router.delete("/google-sheets/:id/sheets/:sheetId", credentialController.removeSheetForCredential);
 router.post("/razorpay", credentialController.createRazorpay);
 
 router.patch("/:id", credentialController.updateCredential);

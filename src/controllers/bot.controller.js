@@ -386,12 +386,12 @@ const setWhatsappChannel = asyncHandler(async (req, res) => {
 });
 
 // POST /api/bots/:id/tools-config
-// body: { enabled?, purposes? (["support","orders","bookings"]), sheetsCredentialId?, enabledTools?, maxToolIterations?, paymentInstructions? }
+// body: { enabled?, purposes? (["support","orders","bookings"]), sheetsCredentialId?, spreadsheetId?, enabledTools?, maxToolIterations?, paymentInstructions? }
 // Turns on the unified support/orders/bookings tool kit for this bot,
 // pointing it at one connected Google Sheet. See services/botTools.service.js
 // and services/toolOrchestrator.service.js for how it's actually run.
 const setToolsConfig = asyncHandler(async (req, res) => {
-  const { enabled, purposes, sheetsCredentialId, razorpayCredentialId, enabledTools, maxToolIterations, paymentInstructions } = req.body;
+  const { enabled, purposes, sheetsCredentialId, spreadsheetId, razorpayCredentialId, enabledTools, maxToolIterations, paymentInstructions } = req.body;
 
   const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
   if (!bot) throw new ApiError(404, "Bot not found");
@@ -413,8 +413,48 @@ const setToolsConfig = asyncHandler(async (req, res) => {
         channel: "google_sheets",
       });
       if (!cred) throw new ApiError(404, "Google Sheets credential not found");
+
+      // Changing accounts invalidates whatever sheet was previously picked
+      // — a spreadsheetId only means something in the context of a specific
+      // credential's `sheets` list.
+      if (String(bot.toolsConfig.sheetsCredentialId) !== String(sheetsCredentialId)) {
+        bot.toolsConfig.spreadsheetId = null;
+      }
+
+      if (spreadsheetId !== undefined && spreadsheetId) {
+        if (cred.googleSheets.method === "oauth") {
+          const ownsSheet = cred.googleSheets.sheets.some((s) => s.spreadsheetId === spreadsheetId);
+          if (!ownsSheet) throw new ApiError(400, "That sheet isn't connected on this credential");
+        } else if (cred.googleSheets.spreadsheetId !== spreadsheetId) {
+          throw new ApiError(400, "That sheet isn't connected on this credential");
+        }
+        bot.toolsConfig.spreadsheetId = spreadsheetId;
+      } else if (cred.googleSheets.method === "service_account") {
+        // Single-sheet credential — no picking needed, just use its one sheet.
+        bot.toolsConfig.spreadsheetId = cred.googleSheets.spreadsheetId || null;
+      }
+    } else {
+      bot.toolsConfig.spreadsheetId = null;
     }
     bot.toolsConfig.sheetsCredentialId = sheetsCredentialId || null;
+  } else if (spreadsheetId !== undefined) {
+    // Picking a different sheet under the already-configured credential.
+    if (!bot.toolsConfig.sheetsCredentialId) throw new ApiError(400, "Select a Google Sheets credential first");
+    if (spreadsheetId) {
+      const IntegrationCredential = require("../models/IntegrationCredential");
+      const cred = await IntegrationCredential.findOne({
+        _id: bot.toolsConfig.sheetsCredentialId,
+        user: req.user._id,
+        channel: "google_sheets",
+      });
+      if (!cred) throw new ApiError(404, "Google Sheets credential not found");
+      const ownsSheet =
+        cred.googleSheets.method === "oauth"
+          ? cred.googleSheets.sheets.some((s) => s.spreadsheetId === spreadsheetId)
+          : cred.googleSheets.spreadsheetId === spreadsheetId;
+      if (!ownsSheet) throw new ApiError(400, "That sheet isn't connected on this credential");
+    }
+    bot.toolsConfig.spreadsheetId = spreadsheetId || null;
   }
 
   if (razorpayCredentialId !== undefined) {
@@ -447,6 +487,9 @@ const setToolsConfig = asyncHandler(async (req, res) => {
       // Tickets tabs, so a connected sheet is always required to enable tools.
       if (!bot.toolsConfig.sheetsCredentialId) {
         throw new ApiError(400, "Connect a Google Sheet before enabling tools");
+      }
+      if (!bot.toolsConfig.spreadsheetId) {
+        throw new ApiError(400, "Pick which sheet this bot should use before enabling tools");
       }
     }
     bot.toolsConfig.enabled = !!enabled;

@@ -216,6 +216,10 @@ const createGoogleSheets = asyncHandler(async (req, res) => {
 
 // POST /api/credentials/google-sheets/:id/create-sheet
 // body: { title? } — the "Create a new sheet" follow-up after OAuth connect.
+// POST /api/credentials/google-sheets/:id/create-sheet
+// body: { title?, label? } — the "Create a new sheet" follow-up after OAuth
+// connect. One credential (one connected Google account) can hold many
+// sheets — this appends to its list rather than replacing anything.
 const createSheetForCredential = asyncHandler(async (req, res) => {
   const IntegrationCredential = require("../models/IntegrationCredential");
   const sheetsOauthService = require("../services/googleSheetsOauth.service");
@@ -224,12 +228,12 @@ const createSheetForCredential = asyncHandler(async (req, res) => {
   if (!cred) throw new ApiError(404, "Credential not found");
   if (cred.googleSheets?.method !== "oauth") throw new ApiError(400, "This action is only for Google-connected sheets");
 
-  await sheetsOauthService.createSpreadsheet(cred, req.body?.title);
-  res.status(200).json({ success: true, data: { credential: sanitizeCredential(cred) } });
+  const sheet = await sheetsOauthService.createSpreadsheet(cred, req.body?.title, req.body?.label);
+  res.status(200).json({ success: true, data: { credential: sanitizeCredential(cred), sheet } });
 });
 
 // POST /api/credentials/google-sheets/:id/attach-sheet
-// body: { spreadsheetId (URL or bare ID) } — "Use an existing sheet" follow-up.
+// body: { spreadsheetId (URL or bare ID), label? } — "Use an existing sheet" follow-up.
 const attachSheetForCredential = asyncHandler(async (req, res) => {
   const IntegrationCredential = require("../models/IntegrationCredential");
   const sheetsOauthService = require("../services/googleSheetsOauth.service");
@@ -239,7 +243,38 @@ const attachSheetForCredential = asyncHandler(async (req, res) => {
   if (cred.googleSheets?.method !== "oauth") throw new ApiError(400, "This action is only for Google-connected sheets");
   if (!req.body?.spreadsheetId?.trim()) throw new ApiError(400, "spreadsheetId (URL or ID) is required");
 
-  await sheetsOauthService.attachSpreadsheet(cred, req.body.spreadsheetId);
+  const sheet = await sheetsOauthService.attachSpreadsheet(cred, req.body.spreadsheetId, req.body?.label);
+  res.status(200).json({ success: true, data: { credential: sanitizeCredential(cred), sheet } });
+});
+
+// PATCH /api/credentials/google-sheets/:id/sheets/:sheetId
+// body: { label } — relabel one connected sheet (our own metadata only,
+// doesn't touch the actual Google Sheets file name).
+const renameSheetForCredential = asyncHandler(async (req, res) => {
+  const IntegrationCredential = require("../models/IntegrationCredential");
+  const sheetsOauthService = require("../services/googleSheetsOauth.service");
+
+  const cred = await IntegrationCredential.findOne({ _id: req.params.id, user: req.user._id, channel: "google_sheets" });
+  if (!cred) throw new ApiError(404, "Credential not found");
+  if (!req.body?.label?.trim()) throw new ApiError(400, "label is required");
+
+  const sheet = await sheetsOauthService.renameSheet(cred, req.params.sheetId, req.body.label.trim());
+  res.status(200).json({ success: true, data: { credential: sanitizeCredential(cred), sheet } });
+});
+
+// DELETE /api/credentials/google-sheets/:id/sheets/:sheetId
+// Removes a sheet from this credential's list — doesn't delete or touch the
+// actual Google spreadsheet, just stops offering it to bots here. Any bot
+// still pointed at it will error clearly on its next tool call rather than
+// silently keep working.
+const removeSheetForCredential = asyncHandler(async (req, res) => {
+  const IntegrationCredential = require("../models/IntegrationCredential");
+  const sheetsOauthService = require("../services/googleSheetsOauth.service");
+
+  const cred = await IntegrationCredential.findOne({ _id: req.params.id, user: req.user._id, channel: "google_sheets" });
+  if (!cred) throw new ApiError(404, "Credential not found");
+
+  await sheetsOauthService.removeSheet(cred, req.params.sheetId);
   res.status(200).json({ success: true, data: { credential: sanitizeCredential(cred) } });
 });
 
@@ -301,6 +336,8 @@ module.exports = {
   createGoogleSheets,
   createSheetForCredential,
   attachSheetForCredential,
+  renameSheetForCredential,
+  removeSheetForCredential,
   createRazorpay,
   updateCredential,
   setDefault,
