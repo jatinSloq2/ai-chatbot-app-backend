@@ -32,7 +32,12 @@ const runAgentTurn = async ({ bot, messages, conversation, sessionId }) => {
     "\n\nYou have tools available for looking up/creating real orders, bookings, and support tickets. " +
     "Use them whenever the user's request needs real data or a real action — don't guess or make up order " +
     "IDs, stock levels, or availability. Ask the user for any missing required info before calling a tool " +
-    "that needs it.";
+    "that needs it.\n\n" +
+    "The Context section above comes from uploaded documents and can be OUT OF DATE — it's fine for general " +
+    "policy/FAQ questions (shipping, returns, how something works), but never treat it as the source of truth " +
+    "for anything a tool can check: current price, current stock, an order's status, or whether a slot is " +
+    "available. If the context and a tool result ever disagree, the tool result is correct — say so and go " +
+    "with it, don't average the two or repeat the doc's number.";
   const working = messages.map((m, i) => (i === 0 && m.role === "system" ? { ...m, content: m.content + toolNote } : m));
 
   for (let iteration = 0; iteration < maxIterations; iteration++) {
