@@ -2,6 +2,60 @@ const axios = require("axios");
 
 const GRAPH_VERSION = "v25.0";
 
+// The AI's replies (and the RAG/tool-call pipeline behind them) are ordinary
+// GitHub-flavored Markdown — **bold**, ## headings, ```js fenced code,
+// [label](url) links — because nothing tells the model to write anything
+// else. WhatsApp has its own, much smaller formatting dialect: bold is a
+// SINGLE asterisk (*bold*), italic is an underscore (_italic_), there's no
+// heading syntax at all, and a fenced code block can't carry a language tag
+// on the opening line. Sent through untouched, "**order ID**" doesn't
+// render bold on WhatsApp — it shows up as the literal asterisks. This
+// converts the common cases right before anything goes out, so it applies
+// no matter who/what produced the text (the AI, the "something went wrong"
+// fallback, or an agent's typed reply during handover).
+const markdownToWhatsApp = (text) => {
+  if (!text) return text;
+  let out = text;
+
+  // Fenced code blocks: WhatsApp renders ``` fine, but a language tag right
+  // after the opening fence (```js, ```json, ...) has no meaning to it and
+  // just shows up as a stray word on its own line inside the block.
+  out = out.replace(/```[ \t]*[a-zA-Z0-9_+-]*\n/g, "```\n");
+
+  // Bold (**text** / __text__) and Markdown headings (# / ## / ...) both
+  // become WhatsApp's single-asterisk bold. Stashed behind a placeholder
+  // first and restored at the very end, so the italic pass below can't
+  // mistake one half of a already-bold "**pair**" for a lone "*"/"_".
+  const stash = [];
+  const stow = (inner) => {
+    stash.push(inner);
+    return `\u0000B${stash.length - 1}\u0000`;
+  };
+  out = out.replace(/\*\*(.+?)\*\*/gs, (_, inner) => stow(inner));
+  out = out.replace(/__(.+?)__/gs, (_, inner) => stow(inner));
+  out = out.replace(/^#{1,6}[ \t]*(.+)$/gm, (_, inner) => stow(inner));
+
+  // Whatever single *text*/_text_ pairs are left are genuine Markdown
+  // italic — WhatsApp's italic is an underscore, not an asterisk. (Real
+  // bullet lines like "* item" only ever have ONE asterisk, so they never
+  // match this pair pattern and are left alone.)
+  out = out.replace(/(^|[^*\n])\*([^*\n]+?)\*(?!\*)/g, "$1_$2_");
+  out = out.replace(/(^|[^_\n])_([^_\n]+?)_(?!_)/g, "$1_$2_");
+
+  // Markdown links [label](url) don't render on WhatsApp at all — the
+  // brackets/parens just show up literally. A bare URL still auto-links,
+  // so keep it visible and tappable alongside the label.
+  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, "$1 ($2)");
+
+  // Horizontal rules (---, ***, ___ alone on a line) mean nothing to
+  // WhatsApp and just show as stray punctuation.
+  out = out.replace(/^(?:-{3,}|\*{3,}|_{3,})\s*$/gm, "");
+
+  out = out.replace(/\u0000B(\d+)\u0000/g, (_, i) => `*${stash[Number(i)]}*`);
+
+  return out.trim();
+};
+
 const requireCred = (cred) => {
     const { phoneNumberId, accessToken } = cred || {};
     if (!phoneNumberId || !accessToken) {
@@ -33,6 +87,8 @@ async function sendWhatsappText(cred, { to, message }) {
     if (!to) throw new Error("A destination WhatsApp number is required");
     if (!message?.trim()) throw new Error("message is required");
 
+    const formatted = markdownToWhatsApp(message);
+
     const { data } = await axios.post(
         `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`,
         {
@@ -40,7 +96,7 @@ async function sendWhatsappText(cred, { to, message }) {
             recipient_type: "individual",
             to,
             type: "text",
-            text: { preview_url: true, body: message },
+            text: { preview_url: true, body: formatted },
         },
         {
             headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
@@ -88,7 +144,7 @@ async function sendWhatsappMedia(cred, { to, media, caption }) {
             ...(type === "document" ? { filename: media.fileName || "file" } : {}),
             // Only image/document/video support a caption on WhatsApp — audio
             // does not. Omit rather than send an ignored field.
-            ...(caption?.trim() && type !== "audio" ? { caption: caption.trim() } : {}),
+            ...(caption?.trim() && type !== "audio" ? { caption: markdownToWhatsApp(caption.trim()) } : {}),
         },
     };
 
@@ -117,7 +173,7 @@ async function sendWhatsappList(cred, { to, bodyText, buttonText, rows, sectionT
             type: "interactive",
             interactive: {
                 type: "list",
-                body: { text: bodyText },
+                body: { text: markdownToWhatsApp(bodyText) },
                 action: {
                     button: buttonText || "Rate now",
                     sections: [
@@ -212,4 +268,5 @@ module.exports = {
     sendTypingIndicator,
     downloadWhatsappMedia,
     toAbsoluteUrl,
+    markdownToWhatsApp,
 };
