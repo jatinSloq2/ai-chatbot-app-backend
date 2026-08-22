@@ -446,12 +446,38 @@ async function search_faq_kb(auth, args, ctx) {
   return { answer: chunks.map((c) => c.content).join("\n\n"), source: "knowledge base" };
 }
 
+// How long a just-opened ticket protects against an accidental duplicate.
+// Covers the case this was written for: the model (or the customer, via a
+// retried "raise a ticket" message) calls this tool again for the same
+// issue moments after the first call already succeeded — e.g. because the
+// *next* model call in the loop timed out and the customer never actually
+// saw the first ticket_id, so naturally asked again. 10 minutes is long
+// enough to cover that retry window without accidentally blocking a
+// genuinely new ticket the customer opens later for a different issue.
+const DUPLICATE_TICKET_WINDOW_MS = 10 * 60 * 1000;
+
 async function create_support_ticket(auth, args, ctx) {
   const user = await resolveOrCreateUser(auth, {
     user_id: ctx.conversation?.visitor?.sheetUserId,
     phone: args.phone || ctx.conversation?.visitor?.phone,
     name: ctx.conversation?.visitor?.name,
   });
+
+  if (user?.user_id) {
+    const recentRows = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Tickets");
+    const cutoff = Date.now() - DUPLICATE_TICKET_WINDOW_MS;
+    const dup = recentRows.find(
+      (t) =>
+        t.user_id === user.user_id &&
+        t.status === "open" &&
+        (t.order_id || "") === (args.order_id || "") &&
+        t.category === args.category &&
+        new Date(t.created_at).getTime() >= cutoff
+    );
+    if (dup) {
+      return { ok: true, ticket_id: dup.ticket_id, duplicate: true };
+    }
+  }
 
   const ticket = {
     ticket_id: genId("TKT"),

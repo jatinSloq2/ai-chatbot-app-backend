@@ -5,6 +5,33 @@ const logger = require("../utils/logger");
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
 
+// Per-attempt timeout for tool-calling completions. Deliberately shorter
+// than the old 60s: a hung request used to block the whole turn for a full
+// minute before the customer saw anything. 25s + one retry fails fast on a
+// genuinely stuck request while still comfortably covering normal latency
+// (observed Gemini tool calls in the wild: ~0.5s–17s).
+const TOOL_CALL_TIMEOUT_MS = 25000;
+const TOOL_CALL_MAX_ATTEMPTS = 2;
+
+// Retries `fn` on timeout/network-level failures only (ECONNABORTED, no
+// response at all) — never on a real API error response (bad key, 4xx,
+// rate limit), since retrying those just wastes the retry budget on
+// something that will fail identically every time.
+const withRetry = async (fn, { attempts = TOOL_CALL_MAX_ATTEMPTS, label = "request" } = {}) => {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      const isTimeoutOrNetwork = !err.response && (err.code === "ECONNABORTED" || err.code === "ETIMEDOUT" || !err.status);
+      if (!isTimeoutOrNetwork || i === attempts - 1) throw err;
+      logger.error(`[${label}] attempt ${i + 1}/${attempts} failed (${err.message}), retrying`);
+    }
+  }
+  throw lastErr;
+};
+
 // Full raw request/response bodies (which include entire RAG context + full
 // conversation history) are only logged in full outside production — in prod
 // they're truncated to keep PII/log-storage exposure bounded while still
@@ -485,10 +512,13 @@ const openAICompatibleToolCompletion = async ({ providerLabel, baseUrl, model, a
   logRequest(providerLabel, { url, model, body: requestBody });
 
   try {
-    const { data } = await axios.post(url, requestBody, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      timeout: 60000,
-    });
+    const { data } = await withRetry(
+      () => axios.post(url, requestBody, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        timeout: TOOL_CALL_TIMEOUT_MS,
+      }),
+      { label: providerLabel }
+    );
     const message = data.choices?.[0]?.message || {};
     logResponse(providerLabel, { url, model, raw: data, finalText: message.content, durationMs: Date.now() - start });
 
@@ -526,10 +556,13 @@ const anthropicToolCompletion = async ({ model, apiKey, messages, temperature, t
   logRequest("Anthropic", { url, model, body: requestBody });
 
   try {
-    const { data } = await axios.post(url, requestBody, {
-      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      timeout: 60000,
-    });
+    const { data } = await withRetry(
+      () => axios.post(url, requestBody, {
+        headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+        timeout: TOOL_CALL_TIMEOUT_MS,
+      }),
+      { label: "Anthropic" }
+    );
     const blocks = data.content || [];
     const text = blocks.filter((b) => b.type === "text").map((b) => b.text).join("");
     logResponse("Anthropic", { url, model, raw: data, finalText: text, durationMs: Date.now() - start });
@@ -573,10 +606,13 @@ const googleToolCompletion = async ({ model, apiKey, messages, temperature, tool
   logRequest("Gemini", { url, model, body: requestBody });
 
   try {
-    const { data } = await axios.post(url, requestBody, {
-      headers: { "X-goog-api-key": apiKey, "content-type": "application/json" },
-      timeout: 60000,
-    });
+    const { data } = await withRetry(
+      () => axios.post(url, requestBody, {
+        headers: { "X-goog-api-key": apiKey, "content-type": "application/json" },
+        timeout: TOOL_CALL_TIMEOUT_MS,
+      }),
+      { label: "Gemini" }
+    );
     const parts = data.candidates?.[0]?.content?.parts || [];
     const text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("");
     const functionCallParts = parts.filter((p) => p.functionCall);

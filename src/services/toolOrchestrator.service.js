@@ -40,8 +40,28 @@ const runAgentTurn = async ({ bot, messages, conversation, sessionId }) => {
     "with it, don't average the two or repeat the doc's number.";
   const working = messages.map((m, i) => (i === 0 && m.role === "system" ? { ...m, content: m.content + toolNote } : m));
 
+  // Every tool call+result executed so far this turn, in order. Kept
+  // outside the loop so that if a LATER model call blows up (timeout,
+  // network error, etc) we still have everything that was already done —
+  // e.g. a support ticket that was genuinely created — instead of losing
+  // it when the error propagates up and responseGenerator falls back to a
+  // fresh, tool-history-free chat call. See the catch block below and
+  // buildDirectAnswerFromToolResults.
+  const completedCalls = [];
+
   for (let iteration = 0; iteration < maxIterations; iteration++) {
-    const result = await llmService.chatCompletionWithTools({ llmConfig: bot.llmConfig, messages: working, tools });
+    let result;
+    try {
+      result = await llmService.chatCompletionWithTools({ llmConfig: bot.llmConfig, messages: working, tools });
+    } catch (err) {
+      if (completedCalls.length) {
+        logger.error(
+          `[toolOrchestrator] Bot ${bot._id} follow-up model call failed after ${completedCalls.length} completed tool call(s), answering directly from tool results: ${err.message}`
+        );
+        return buildDirectAnswerFromToolResults(completedCalls);
+      }
+      throw err;
+    }
 
     if (!result.toolCalls?.length) {
       return result.content || "I wasn't able to come up with a response — could you rephrase that?";
@@ -51,6 +71,7 @@ const runAgentTurn = async ({ bot, messages, conversation, sessionId }) => {
     for (const call of result.toolCalls) {
       const toolResult = await botToolsService.executeTool(bot, call.name, call.arguments, { conversation, sessionId });
       results.push(toolResult);
+      completedCalls.push({ name: call.name, args: call.arguments, result: toolResult });
     }
 
     working.push(...llmService.buildToolResultMessages(provider, result.rawAssistantMessage, result.toolCalls, results));
@@ -82,6 +103,68 @@ const runAgentTurn = async ({ bot, messages, conversation, sessionId }) => {
   }
 
   return "I looked into that but I'm having trouble pulling everything together — could you try again, or ask for a human?";
+};
+
+// Fast, deterministic, no-LLM-call answer built directly from whatever
+// tools already ran successfully this turn. Used only when the model call
+// that would normally phrase the final answer itself fails (timeout,
+// network error) AFTER real work was already done — the alternative is
+// silently discarding a completed action (e.g. a support ticket that now
+// exists in the sheet) and leaving the customer with neither the result
+// nor an explanation. Deliberately templated rather than routed through
+// another LLM call: at this point we've already had one slow/failing
+// upstream call this turn, so answering directly is both faster and one
+// less thing that can time out.
+//
+// Only the last completed call is used for the headline message — if
+// several tools ran this turn, the most recent one is almost always the
+// one the customer is waiting on (e.g. list_items → check_availability →
+// create_support_ticket: the ticket is the news, not the earlier lookups).
+const buildDirectAnswerFromToolResults = (completedCalls) => {
+  const last = completedCalls[completedCalls.length - 1];
+  const r = last.result || {};
+
+  switch (last.name) {
+    case "create_support_ticket":
+      if (r.ok && r.ticket_id) {
+        return `Done — I've opened a support ticket for you. Your ticket ID is ${r.ticket_id}. Our team will follow up on it.`;
+      }
+      break;
+    case "escalate_to_human":
+      if (r.ok) {
+        return r.message || "Connecting you with a human agent now.";
+      }
+      break;
+    case "create_order":
+      if (r.ok && r.order_id) {
+        return `Your order is confirmed — order ID ${r.order_id}.${r.total ? ` Total: ${r.total}.` : ""}`;
+      }
+      break;
+    case "create_payment_link":
+      if (r.ok && r.payment_link) {
+        return `Here's your payment link: ${r.payment_link}`;
+      }
+      break;
+    case "cancel_order":
+      if (r.ok) {
+        return `Your order${last.args?.order_id ? ` ${last.args.order_id}` : ""} has been cancelled.`;
+      }
+      break;
+    case "initiate_refund":
+      if (r.ok) {
+        return "Your refund request has been logged and is being processed.";
+      }
+      break;
+  }
+
+  // Generic fallback: don't claim success/failure we can't confirm, just
+  // tell the customer what happened and point them to a human rather than
+  // guessing at phrasing for a tool result shape we don't specifically
+  // template above.
+  if (r.error || r.ok === false) {
+    return "I ran into an issue completing that just now. Let me connect you with a human agent who can help directly.";
+  }
+  return "That's been taken care of. Let me know if there's anything else you need.";
 };
 
 module.exports = { canRunTools, runAgentTurn };
