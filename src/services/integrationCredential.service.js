@@ -8,6 +8,7 @@ const CHANNEL_FIELD = {
   sms: "sms",
   ai_provider: "aiProvider",
   google_sheets: "googleSheets",
+  razorpay: "razorpay",
 };
 
 const getOwnedCredential = async (id, userId) => {
