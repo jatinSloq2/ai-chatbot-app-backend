@@ -10,6 +10,18 @@ const logger = require("../utils/logger");
 // Short random IDs in the same style the master spec uses (ORD00123 etc).
 const genId = (prefix) => `${prefix}${Date.now().toString(36).toUpperCase().slice(-4)}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
+// Items are tracked one of two ways: by a plain stock count (a physical
+// good sitting in inventory) or by bookable slots in the Availability tab
+// (a service/rental with a schedule). Sheet owners fill in item_type
+// themselves and reasonably write "physical" or "rental" instead of the
+// literal word "product" — this is what actually distinguishes the two
+// paths, not the exact string used. Anything not recognized as
+// slot-based falls back to stock-based, since that's the more common
+// case and the safer default (a typo'd item_type shouldn't make a real
+// item register as permanently unavailable).
+const SLOT_BASED_TYPES = new Set(["service", "booking", "appointment"]);
+const isStockTracked = (itemType) => !SLOT_BASED_TYPES.has(String(itemType || "").toLowerCase());
+
 // Loads + decrypts the bot's connected Google Sheets credential, returns a
 // ready-to-use { accessToken, spreadsheetId }. Cached per bot object for the
 // lifetime of one chat turn (a turn may call several tools).
@@ -115,7 +127,10 @@ async function list_items(auth, args) {
   const rows = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Items");
   const filtered = rows.filter((r) => {
     if (r.status && r.status !== "active") return false;
-    if (args.item_type && r.item_type !== args.item_type) return false;
+    if (args.item_type && args.item_type !== "any") {
+      const wantsStock = args.item_type === "product";
+      if (isStockTracked(r.item_type) !== wantsStock) return false;
+    }
     if (args.category && String(r.category).toLowerCase() !== String(args.category).toLowerCase()) return false;
     if (args.keyword) {
       const kw = args.keyword.toLowerCase();
@@ -132,7 +147,7 @@ async function list_items(auth, args) {
       price: r.price,
       currency: r.currency || "INR",
       image_url: r.image_url,
-      stock_qty: r.item_type === "product" ? r.stock_qty : undefined,
+      stock_qty: isStockTracked(r.item_type) ? r.stock_qty : undefined,
     })),
   };
 }
@@ -147,7 +162,7 @@ async function check_availability(auth, args) {
   const item = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Items", "item_id", args.item_id);
   if (!item) return { available: false, reason: "Item not found" };
 
-  if (item.item_type === "product") {
+  if (isStockTracked(item.item_type)) {
     const remaining = Number(item.stock_qty) || 0;
     return { available: remaining >= (args.qty_or_people || 1), remaining_qty: remaining };
   }
@@ -193,8 +208,8 @@ async function create_order(auth, args, ctx) {
     user_id: user.user_id,
     item_id: item.item_id,
     qty_or_people: qty,
-    date_or_slot: item.item_type === "service" ? args.date_or_slot || "" : "",
-    delivery_address: item.item_type === "product" ? args.delivery_address || "" : "",
+    date_or_slot: !isStockTracked(item.item_type) ? args.date_or_slot || "" : "",
+    delivery_address: isStockTracked(item.item_type) ? args.delivery_address || "" : "",
     total_amount: price * qty,
     order_status: "pending",
     payment_status: "unpaid",
@@ -204,7 +219,7 @@ async function create_order(auth, args, ctx) {
   await sheets.appendRow(auth.accessToken, auth.spreadsheetId, "Orders", order);
 
   // side effects — decrement stock / increment booked_count
-  if (item.item_type === "product") {
+  if (isStockTracked(item.item_type)) {
     await sheets.updateRowByKey(auth.accessToken, auth.spreadsheetId, "Items", "item_id", item.item_id, {
       stock_qty: Math.max(0, (Number(item.stock_qty) || 0) - qty),
     });
@@ -250,11 +265,11 @@ async function cancel_order(auth, args) {
 
   // release stock/slot
   const item = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Items", "item_id", order.item_id);
-  if (item?.item_type === "product") {
+  if (item && isStockTracked(item.item_type)) {
     await sheets.updateRowByKey(auth.accessToken, auth.spreadsheetId, "Items", "item_id", item.item_id, {
       stock_qty: (Number(item.stock_qty) || 0) + (Number(order.qty_or_people) || 0),
     });
-  } else if (item?.item_type === "service") {
+  } else if (item) {
     const [date] = (order.date_or_slot || "").split(" / ");
     const slots = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Availability");
     const slot = slots.find((s) => s.item_id === item.item_id && (s.date === date || s.time_slot === order.date_or_slot));
