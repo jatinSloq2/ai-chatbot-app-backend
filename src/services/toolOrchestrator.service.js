@@ -57,6 +57,30 @@ const runAgentTurn = async ({ bot, messages, conversation, sessionId }) => {
   }
 
   logger.error(`[toolOrchestrator] Bot ${bot._id} hit max tool iterations (${maxIterations}) without a final answer`);
+
+  // Don't just give up here — the model has usually gathered SOMETHING
+  // useful across those iterations (found the item but not stock, found the
+  // user but the order failed, etc). Forcing one last no-tools call makes it
+  // turn that into an actual answer instead of a dead-end apology. Only
+  // fall back to the canned line if even this comes back empty or errors.
+  try {
+    const wrapUpNote = {
+      role: "user",
+      content:
+        "You've used up your tool calls for this turn. Don't call any more tools — answer the customer now, " +
+        "using only what you already found above. If you genuinely couldn't find or complete what they asked, " +
+        "say so plainly and offer to connect them with a human, rather than repeating an apology with no content.",
+    };
+    const finalText = await llmService.streamChatCompletion({
+      llmConfig: bot.llmConfig,
+      messages: [...working, wrapUpNote],
+      onToken: () => { },
+    });
+    if (finalText?.trim()) return finalText;
+  } catch (err) {
+    logger.error(`[toolOrchestrator] Forced wrap-up call also failed for bot ${bot._id}: ${err.message}`);
+  }
+
   return "I looked into that but I'm having trouble pulling everything together — could you try again, or ask for a human?";
 };
 

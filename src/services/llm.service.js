@@ -355,12 +355,7 @@ const streamOpenAICompatible = async ({ providerLabel, baseUrl, model, apiKey, m
 // --- Google Gemini (different request/response shape from OpenAI-style APIs) ---
 const streamGoogle = async ({ model, apiKey, messages, temperature, onToken }) => {
   const systemMsg = messages.find((m) => m.role === "system")?.content;
-  const contents = messages
-    .filter((m) => m.role !== "system")
-    .map((m) => ({
-      role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
-    }));
+  const contents = messages.filter((m) => m.role !== "system").map(toGeminiContent);
 
   const requestBody = {
     contents,
