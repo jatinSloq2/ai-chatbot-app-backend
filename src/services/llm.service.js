@@ -7,11 +7,12 @@ const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
 
 // Per-attempt timeout for tool-calling completions. Deliberately shorter
 // than the old 60s: a hung request used to block the whole turn for a full
-// minute before the customer saw anything. 25s + one retry fails fast on a
-// genuinely stuck request while still comfortably covering normal latency
-// (observed Gemini tool calls in the wild: ~0.5s–17s).
-const TOOL_CALL_TIMEOUT_MS = 25000;
-const TOOL_CALL_MAX_ATTEMPTS = 2;
+// minute before the customer saw anything. 15s per attempt, up to 3
+// attempts — worst case ~45s instead of a silent 60s dead wait, and most
+// slow/flaky requests recover well within a couple of retries (observed
+// Gemini tool calls in the wild: ~0.5s–17s).
+const TOOL_CALL_TIMEOUT_MS = 15000;
+const TOOL_CALL_MAX_ATTEMPTS = 3;
 
 // Retries `fn` on timeout/network-level failures only (ECONNABORTED, no
 // response at all) — never on a real API error response (bad key, 4xx,

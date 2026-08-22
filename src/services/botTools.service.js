@@ -446,16 +446,14 @@ async function search_faq_kb(auth, args, ctx) {
   return { answer: chunks.map((c) => c.content).join("\n\n"), source: "knowledge base" };
 }
 
-// How long a just-opened ticket protects against an accidental duplicate.
-// Covers the case this was written for: the model (or the customer, via a
-// retried "raise a ticket" message) calls this tool again for the same
-// issue moments after the first call already succeeded — e.g. because the
-// *next* model call in the loop timed out and the customer never actually
-// saw the first ticket_id, so naturally asked again. 10 minutes is long
-// enough to cover that retry window without accidentally blocking a
-// genuinely new ticket the customer opens later for a different issue.
-const DUPLICATE_TICKET_WINDOW_MS = 10 * 60 * 1000;
-
+// One open ticket per user at a time, full stop — not scoped to category,
+// order, or a time window. If this user already has ANY ticket with
+// status "open", every subsequent create_support_ticket call just returns
+// that same ticket instead of opening a new one, no matter what the new
+// issue is about. A second, genuinely different problem gets folded into
+// the same open ticket rather than fragmenting into parallel tickets your
+// team then has to de-duplicate by hand; support can always split it back
+// out on their end if it turns out to be unrelated.
 async function create_support_ticket(auth, args, ctx) {
   const user = await resolveOrCreateUser(auth, {
     user_id: ctx.conversation?.visitor?.sheetUserId,
@@ -464,18 +462,10 @@ async function create_support_ticket(auth, args, ctx) {
   });
 
   if (user?.user_id) {
-    const recentRows = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Tickets");
-    const cutoff = Date.now() - DUPLICATE_TICKET_WINDOW_MS;
-    const dup = recentRows.find(
-      (t) =>
-        t.user_id === user.user_id &&
-        t.status === "open" &&
-        (t.order_id || "") === (args.order_id || "") &&
-        t.category === args.category &&
-        new Date(t.created_at).getTime() >= cutoff
-    );
-    if (dup) {
-      return { ok: true, ticket_id: dup.ticket_id, duplicate: true };
+    const allTickets = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Tickets");
+    const openTicket = allTickets.find((t) => t.user_id === user.user_id && t.status === "open");
+    if (openTicket) {
+      return { ok: true, ticket_id: openTicket.ticket_id, duplicate: true, message: "You already have an open ticket — reusing it instead of creating a new one." };
     }
   }
 

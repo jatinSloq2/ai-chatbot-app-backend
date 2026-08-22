@@ -127,7 +127,9 @@ const buildDirectAnswerFromToolResults = (completedCalls) => {
   switch (last.name) {
     case "create_support_ticket":
       if (r.ok && r.ticket_id) {
-        return `Done — I've opened a support ticket for you. Your ticket ID is ${r.ticket_id}. Our team will follow up on it.`;
+        return r.duplicate
+          ? `You already have an open ticket — ID ${r.ticket_id}. I've added this to it, and our team will follow up.`
+          : `Done — I've opened a support ticket for you. Your ticket ID is ${r.ticket_id}. Our team will follow up on it.`;
       }
       break;
     case "escalate_to_human":
