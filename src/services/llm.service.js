@@ -663,7 +663,13 @@ const buildToolResultMessages = (provider, rawAssistantMessage, toolCalls, resul
     return [
       rawAssistantMessage,
       {
-        role: "function",
+        // NOTE: role "function" is rejected outright by this API — confirmed
+        // live: "Role 'function' is not supported. Please use a valid role:
+        // SYSTEM, SYSTEM_1, USER, ASSISTANT, DEVELOPER, CONTEXT,
+        // USER_CONTEXT, MODEL, USER." functionResponse parts go in a "user"
+        // turn instead; Gemini identifies them by the functionResponse part
+        // type, not by a dedicated role.
+        role: "user",
         parts: toolCalls.map((tc, i) => ({
           functionResponse: {
             id: tc.id,
