@@ -7,7 +7,7 @@ const IntegrationCredential = require("../models/IntegrationCredential");
 const Bot = require("../models/Bot");
 const Conversation = require("../models/Conversation");
 const ragService = require("../services/rag.service");
-const llmService = require("../services/llm.service");
+const responseGeneratorService = require("../services/responseGenerator.service");
 const botService = require("../services/bot.service");
 const handoverService = require("../services/handover.service");
 const analyticsService = require("../services/analytics.service");
@@ -536,10 +536,13 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skip
         retrievalMs = Date.now() - retrStart;
 
         const llmStart = Date.now();
-        fullResponse = await llmService.streamChatCompletion({
-            llmConfig: bot.llmConfig,
+        fullResponse = await responseGeneratorService.generateResponse({
+            bot,
             messages,
+            conversation,
+            sessionId: from,
             onToken: () => { }, // no token-by-token streaming over WhatsApp
+            stream: false, // no point pacing text that's never displayed live
         });
         llmMs = Date.now() - llmStart;
 
@@ -554,15 +557,18 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skip
             if (!handoverStarted) {
                 // No agents available after all — don't strand the visitor
                 // with silence; give them a real answer instead.
-                fullResponse = await llmService.streamChatCompletion({
-                    llmConfig: bot.llmConfig,
+                fullResponse = await responseGeneratorService.generateResponse({
+                    bot,
                     messages: ragService.buildRagMessages({
                         systemPrompt: withLanguageInstruction(bot.systemPrompt, conversation.visitor.language),
                         relevantChunks,
                         history: recentHistory,
                         userMessage: text,
                     }),
+                    conversation,
+                    sessionId: from,
                     onToken: () => { },
+                    stream: false,
                 });
                 conversation.messages.push({ role: "assistant", content: fullResponse });
                 await conversation.save();

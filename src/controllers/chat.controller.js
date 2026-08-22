@@ -2,8 +2,7 @@ const asyncHandler = require("../utils/asyncHandler");
 const ApiError = require("../utils/ApiError");
 const Conversation = require("../models/Conversation");
 const ragService = require("../services/rag.service");
-const llmService = require("../services/llm.service");
-const toolOrchestratorService = require("../services/toolOrchestrator.service");
+const responseGeneratorService = require("../services/responseGenerator.service");
 const botService = require("../services/bot.service");
 const handoverService = require("../services/handover.service");
 const realtimeService = require("../services/realtime.service");
@@ -32,35 +31,6 @@ const buildQuickReplyRichContent = (bot, conversation) => {
   const alreadyReplied = conversation.messages.some((m) => m.role === "assistant");
   if (alreadyReplied) return null;
   return { type: "quick_replies", buttons: faqs.map((q) => ({ label: q, value: q })) };
-};
-
-// Tool-loop answers come back as one finished string (no token-by-token
-// provider stream to piggyback on, since the loop itself is non-streaming
-// request/response). This fakes the same progressive-render UX the widget
-// already relies on by chunking the text and pacing it out over onToken.
-const streamTextInChunks = async (text, onToken) => {
-  const words = text.split(/(\s+)/);
-  for (const chunk of words) {
-    if (chunk) onToken(chunk);
-    await new Promise((resolve) => setTimeout(resolve, 12));
-  }
-};
-
-// Runs the tool-calling agent loop when the bot is set up for it, falling
-// back to the plain streaming path (no tools) on any failure — a broken
-// Sheet connection or tool-call error should never take the whole chat
-// down. Returns the final response text either way.
-const generateResponse = async ({ bot, messages, conversation, sessionId, onToken }) => {
-  if (toolOrchestratorService.canRunTools(bot)) {
-    try {
-      const text = await toolOrchestratorService.runAgentTurn({ bot, messages, conversation, sessionId });
-      await streamTextInChunks(text, onToken);
-      return text;
-    } catch (err) {
-      require("../utils/logger").error(`[chat] Tool orchestrator failed, falling back to plain chat: ${err.message}`);
-    }
-  }
-  return llmService.streamChatCompletion({ llmConfig: bot.llmConfig, messages, onToken });
 };
 
 // POST /api/v1/chat  (auth: bot public key)
@@ -140,7 +110,7 @@ const chat = asyncHandler(async (req, res) => {
 
     // 3. Generate LLM response (tool-calling loop if configured, else plain stream)
     const llmStart = Date.now();
-    fullResponse = await generateResponse({
+    fullResponse = await responseGeneratorService.generateResponse({
       bot,
       messages,
       conversation,
@@ -255,7 +225,7 @@ const testChat = asyncHandler(async (req, res) => {
     retrievalMs = Date.now() - retrStart;
 
     const llmStart = Date.now();
-    fullResponse = await generateResponse({
+    fullResponse = await responseGeneratorService.generateResponse({
       bot,
       messages,
       conversation,

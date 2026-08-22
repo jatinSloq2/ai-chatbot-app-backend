@@ -459,7 +459,7 @@ const streamGoogle = async ({ model, apiKey, messages, temperature, onToken }) =
 // function calling in a way we support here — Ollama and Google are left on
 // the plain streaming path (see TOOL_CAPABLE_PROVIDERS).
 // ---------------------------------------------------------------------------
-const TOOL_CAPABLE_PROVIDERS = ["openai", "groq", "mistral", "anthropic"];
+const TOOL_CAPABLE_PROVIDERS = ["openai", "groq", "mistral", "anthropic", "google"];
 
 const PROVIDER_BASE_URLS = {
   openai: "https://api.openai.com/v1",
@@ -552,6 +552,69 @@ const anthropicToolCompletion = async ({ model, apiKey, messages, temperature, t
   }
 };
 
+// Gemini's `contents` entries don't share the plain {role, content:"..."}
+// shape the rest of this file uses — a turn that carries a function call or
+// function result is its own native shape (see rawAssistantMessage /
+// buildToolResultMessages below), so once a message already has `.parts` we
+// pass it straight through; anything else (plain history/system-stripped
+// user/assistant turns) gets converted the same way streamGoogle does it.
+const toGeminiContent = (m) => {
+  if (m.parts) return { role: m.role, parts: m.parts };
+  return { role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] };
+};
+
+const googleToolCompletion = async ({ model, apiKey, messages, temperature, tools }) => {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const systemMsg = messages.find((m) => m.role === "system")?.content;
+  const contents = messages.filter((m) => m.role !== "system").map(toGeminiContent);
+  const requestBody = {
+    contents,
+    systemInstruction: systemMsg ? { parts: [{ text: systemMsg }] } : undefined,
+    tools: [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description, parameters: t.parameters })) }],
+    generationConfig: { temperature },
+  };
+  const start = Date.now();
+
+  logRequest("Gemini", { url, model, body: requestBody });
+
+  try {
+    const { data } = await axios.post(url, requestBody, {
+      headers: { "X-goog-api-key": apiKey, "content-type": "application/json" },
+      timeout: 60000,
+    });
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    const text = parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("");
+    const functionCallParts = parts.filter((p) => p.functionCall);
+    logResponse("Gemini", { url, model, raw: data, finalText: text, durationMs: Date.now() - start });
+
+    return {
+      content: text,
+      // Gemini attaches its own id to each functionCall when a turn makes
+      // more than one parallel call, precisely so the matching
+      // functionResponse can reference it unambiguously — reuse that when
+      // present, and only synthesize a fallback for older model responses
+      // that don't include one.
+      toolCalls: functionCallParts.map((p, i) => ({
+        id: p.functionCall.id || `gemini_call_${Date.now()}_${i}`,
+        name: p.functionCall.name,
+        arguments: p.functionCall.args || {},
+      })),
+      // Kept in Gemini's own {role:"model", parts:[...]} shape — see
+      // toGeminiContent above, which passes it straight through next turn.
+      rawAssistantMessage: { role: "model", parts: parts.filter((p) => !p.thought) },
+    };
+  } catch (err) {
+    let rawErrorBody = null;
+    let msg = err.message;
+    if (err.response?.data) {
+      rawErrorBody = JSON.stringify(err.response.data);
+      msg = err.response.data?.error?.message || err.message;
+    }
+    logFailure("Gemini", { url, model, body: requestBody, status: err.response?.status, rawError: rawErrorBody, durationMs: Date.now() - start });
+    throw new ApiError(502, `Google Gemini tool-call request failed: ${msg}`);
+  }
+};
+
 // Returns { content, toolCalls: [{id, name, arguments}], rawAssistantMessage }
 const chatCompletionWithTools = async ({ llmConfig, messages, tools }) => {
   const { provider, model, encryptedApiKey, temperature } = llmConfig;
@@ -563,6 +626,9 @@ const chatCompletionWithTools = async ({ llmConfig, messages, tools }) => {
 
   if (provider === "anthropic") {
     return anthropicToolCompletion({ model, apiKey, messages, temperature, tools });
+  }
+  if (provider === "google") {
+    return googleToolCompletion({ model, apiKey, messages, temperature, tools });
   }
   return openAICompatibleToolCompletion({
     providerLabel: provider,
@@ -589,6 +655,26 @@ const buildToolResultMessages = (provider, rawAssistantMessage, toolCalls, resul
           type: "tool_result",
           tool_use_id: tc.id,
           content: JSON.stringify(results[i]),
+        })),
+      },
+    ];
+  }
+  if (provider === "google") {
+    return [
+      rawAssistantMessage,
+      {
+        role: "function",
+        parts: toolCalls.map((tc, i) => ({
+          functionResponse: {
+            id: tc.id,
+            name: tc.name,
+            // functionResponse.response must be an object/struct — wrap
+            // non-object results (strings, numbers, arrays) instead of
+            // sending them raw, which Gemini rejects.
+            response: results[i] && typeof results[i] === "object" && !Array.isArray(results[i])
+              ? results[i]
+              : { result: results[i] },
+          },
         })),
       },
     ];
