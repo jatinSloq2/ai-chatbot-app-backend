@@ -391,13 +391,24 @@ const setWhatsappChannel = asyncHandler(async (req, res) => {
 // pointing it at one connected Google Sheet. See services/botTools.service.js
 // and services/toolOrchestrator.service.js for how it's actually run.
 const setToolsConfig = asyncHandler(async (req, res) => {
-  const { enabled, purposes, sheetsCredentialId, spreadsheetId, razorpayCredentialId, enabledTools, maxToolIterations, paymentInstructions } = req.body;
+  const {
+    enabled,
+    purposes,
+    sheetsCredentialId,
+    spreadsheetId,
+    razorpayCredentialId,
+    meetingCredentialId,
+    enabledTools,
+    maxToolIterations,
+    paymentInstructions,
+    sendCustomerEmails,
+  } = req.body;
 
   const bot = await Bot.findOne({ _id: req.params.id, user: req.user._id });
   if (!bot) throw new ApiError(404, "Bot not found");
 
   if (purposes !== undefined) {
-    const valid = ["support", "orders", "bookings"];
+    const valid = ["support", "orders", "bookings", "meetings"];
     if (!Array.isArray(purposes) || purposes.some((p) => !valid.includes(p))) {
       throw new ApiError(400, `purposes must be a subset of: ${valid.join(", ")}`);
     }
@@ -470,6 +481,19 @@ const setToolsConfig = asyncHandler(async (req, res) => {
     bot.toolsConfig.razorpayCredentialId = razorpayCredentialId || null;
   }
 
+  if (meetingCredentialId !== undefined) {
+    if (meetingCredentialId) {
+      const IntegrationCredential = require("../models/IntegrationCredential");
+      const cred = await IntegrationCredential.findOne({
+        _id: meetingCredentialId,
+        user: req.user._id,
+        channel: "meeting_scheduling",
+      });
+      if (!cred) throw new ApiError(404, "Meeting scheduling credential not found");
+    }
+    bot.toolsConfig.meetingCredentialId = meetingCredentialId || null;
+  }
+
   if (enabledTools !== undefined) {
     if (!Array.isArray(enabledTools)) throw new ApiError(400, "enabledTools must be an array of tool names");
     bot.toolsConfig.enabledTools = enabledTools;
@@ -477,11 +501,12 @@ const setToolsConfig = asyncHandler(async (req, res) => {
 
   if (maxToolIterations !== undefined) bot.toolsConfig.maxToolIterations = Number(maxToolIterations) || 4;
   if (paymentInstructions !== undefined) bot.toolsConfig.paymentInstructions = paymentInstructions;
+  if (sendCustomerEmails !== undefined) bot.toolsConfig.sendCustomerEmails = !!sendCustomerEmails;
 
   if (enabled !== undefined) {
     if (enabled) {
       if (!bot.toolsConfig.purposes?.length) {
-        throw new ApiError(400, "Pick at least one of support / orders / bookings before enabling tools");
+        throw new ApiError(400, "Pick at least one of support / orders / bookings / meetings before enabling tools");
       }
       // Every purpose (including support-only) uses at least the Users/
       // Tickets tabs, so a connected sheet is always required to enable tools.
@@ -490,6 +515,9 @@ const setToolsConfig = asyncHandler(async (req, res) => {
       }
       if (!bot.toolsConfig.spreadsheetId) {
         throw new ApiError(400, "Pick which sheet this bot should use before enabling tools");
+      }
+      if (bot.toolsConfig.purposes.includes("meetings") && !bot.toolsConfig.meetingCredentialId) {
+        throw new ApiError(400, 'Connect a meeting-scheduling provider (Google Meet/Cal.com/Calendly) before enabling the "meetings" purpose');
       }
     }
     bot.toolsConfig.enabled = !!enabled;

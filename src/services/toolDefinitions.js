@@ -14,7 +14,7 @@ const TOOLS = [
   // --- Catalog ---
   {
     name: "list_items",
-    purposes: ["orders", "bookings"],
+    purposes: ["orders", "bookings", "meetings"],
     description:
       "Browse available products or services, e.g. 'show me sarees', 'what safari packages do you have', 'what rooms are available'.",
     parameters: {
@@ -29,7 +29,7 @@ const TOOLS = [
   },
   {
     name: "get_item_details",
-    purposes: ["orders", "bookings"],
+    purposes: ["orders", "bookings", "meetings"],
     description: "Get full details for one specific product, package, or room the user asked about.",
     parameters: {
       type: "object",
@@ -39,16 +39,66 @@ const TOOLS = [
   },
   {
     name: "check_availability",
-    purposes: ["orders", "bookings"],
-    description: "Check stock (products) or open slots/seats (services) before confirming an order or booking.",
+    purposes: ["orders", "bookings", "meetings"],
+    description: "Check stock (products) or open slots/seats (services/meetings) before confirming an order or booking.",
     parameters: {
       type: "object",
       properties: {
         item_id: { type: "string" },
-        date: { type: "string", description: "Required for services — YYYY-MM-DD" },
+        date: { type: "string", description: "Required for services/meetings — YYYY-MM-DD" },
         qty_or_people: { type: "number", description: "Quantity for a product, headcount for a service" },
       },
       required: ["item_id", "qty_or_people"],
+    },
+  },
+
+  // --- Meeting bookings (1-on-1s — Google Meet / Cal.com / Calendly) ---
+  {
+    name: "list_mentors",
+    purposes: ["meetings"],
+    description: "Browse mentors/experts available for a 1-on-1 meeting booking, e.g. 'who can I book a call with', 'what mentors do you have'.",
+    parameters: {
+      type: "object",
+      properties: { keyword: { type: "string", description: "Free-text search across name/description" } },
+    },
+  },
+  {
+    name: "book_meeting",
+    purposes: ["meetings"],
+    description:
+      "Book a 1-on-1 meeting with a mentor once the user has confirmed the mentor, date, and time slot. Creates a real meeting (Google Meet/Cal.com) if free, or a payment link first if it's paid — the actual meeting is created once payment clears.",
+    parameters: {
+      type: "object",
+      properties: {
+        item_id: { type: "string", description: "The mentor's item_id from Items" },
+        date: { type: "string", description: "YYYY-MM-DD" },
+        time_slot: { type: "string", description: "Exact time_slot text from Availability, e.g. '10:00-11:00'" },
+        name: { type: "string", description: "Customer name" },
+        email: { type: "string", description: "Customer email — required, used to send the meeting confirmation/join link" },
+        phone: { type: "string", description: "Customer phone" },
+      },
+      required: ["item_id", "date", "time_slot", "email"],
+    },
+  },
+  {
+    name: "get_booking_details",
+    purposes: ["meetings"],
+    description: "Look up a meeting booking's status and join link, e.g. 'where's my meeting link', 'is my call confirmed'.",
+    parameters: {
+      type: "object",
+      properties: {
+        booking_id: { type: "string" },
+        order_id: { type: "string", description: "Fallback lookup if the user doesn't have their booking ID" },
+      },
+    },
+  },
+  {
+    name: "cancel_meeting_booking",
+    purposes: ["meetings"],
+    description: "Cancel an existing 1-on-1 meeting booking at the user's request.",
+    parameters: {
+      type: "object",
+      properties: { booking_id: { type: "string" }, order_id: { type: "string" } },
     },
   },
 
@@ -154,7 +204,7 @@ const TOOLS = [
   // --- Users (cross-cutting — on whenever any purpose is enabled) ---
   {
     name: "capture_user_info",
-    purposes: ["support", "orders", "bookings"],
+    purposes: ["support", "orders", "bookings", "meetings"],
     description: "Save the customer's name/phone/email/address when it's missing and needed to proceed.",
     parameters: {
       type: "object",
@@ -168,7 +218,7 @@ const TOOLS = [
   },
   {
     name: "get_user_profile",
-    purposes: ["support", "orders", "bookings"],
+    purposes: ["support", "orders", "bookings", "meetings"],
     description: "Look up a returning customer's saved profile by phone number, to avoid re-asking for their details.",
     parameters: {
       type: "object",
@@ -195,7 +245,7 @@ const TOOLS = [
   },
   {
     name: "escalate_to_human",
-    purposes: ["support", "orders", "bookings"],
+    purposes: ["support", "orders", "bookings", "meetings"],
     description: "Connect the user to a live human agent — use for repeated failures, negative sentiment, or an explicit request for a person.",
     parameters: {
       type: "object",
@@ -210,7 +260,7 @@ const TOOLS = [
 // tool instead of being silently injected into every prompt.
 const SEARCH_FAQ_TOOL = {
   name: "search_faq_kb",
-  purposes: ["support", "orders", "bookings"],
+  purposes: ["support", "orders", "bookings", "meetings"],
   description: "Search the knowledge base for a general question that has nothing to do with a specific order/booking.",
   parameters: {
     type: "object",

@@ -168,7 +168,7 @@ const botSchema = new mongoose.Schema(
       enabled: { type: Boolean, default: false },
       purposes: {
         type: [String],
-        enum: ["support", "orders", "bookings"],
+        enum: ["support", "orders", "bookings", "meetings"],
         default: [],
       },
       // Points at an IntegrationCredential with channel:"google_sheets" —
@@ -187,6 +187,14 @@ const botSchema = new mongoose.Schema(
       // those tools just log a pending-payment row and show
       // paymentInstructions instead — no money actually moves.
       razorpayCredentialId: { type: mongoose.Schema.Types.ObjectId, ref: "IntegrationCredential", default: null },
+      // Points at an IntegrationCredential with channel:"meeting_scheduling"
+      // — when set (and the "meetings" purpose is on), book_meeting/
+      // cancel_meeting_booking actually create/cancel a real meeting
+      // (Google Meet event, Cal.com booking, or a Calendly scheduling
+      // link) via services/meetingProviders.service.js. Per-mentor config
+      // (which item_id, host email, event type, etc.) lives on the
+      // connected sheet's "Mentors" tab, not here.
+      meetingCredentialId: { type: mongoose.Schema.Types.ObjectId, ref: "IntegrationCredential", default: null },
       // Optional manual override of the exact tool names exposed to the
       // LLM. Empty = derive automatically from `purposes` (recommended).
       enabledTools: { type: [String], default: [] },
@@ -203,6 +211,13 @@ const botSchema = new mongoose.Schema(
         type: String,
         default: "We've noted this order as pending payment — our team will share payment details shortly.",
       },
+      // Master switch for every customer-facing transactional email this
+      // toolkit sends (order confirmation, booking confirmation with the
+      // meeting link, and payment-received) — sent via the bot owner's own
+      // connected Email credential (falls back to the platform mailer if
+      // none is connected), see services/botTransactionalEmail.service.js.
+      // On by default; the owner can turn it off per bot.
+      sendCustomerEmails: { type: Boolean, default: true },
     },
 
     // --- Human agent handover (Agent System) ---

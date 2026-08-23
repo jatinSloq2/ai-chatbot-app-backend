@@ -5,6 +5,8 @@ const sheetsOauth = require("./googleSheetsOauth.service");
 const razorpayService = require("./razorpay.service");
 const ragService = require("./rag.service");
 const handoverService = require("./handover.service");
+const meetingProviders = require("./meetingProviders.service");
+const botEmail = require("./botTransactionalEmail.service");
 const logger = require("../utils/logger");
 
 // Short random IDs in the same style the master spec uses (ORD00123 etc).
@@ -19,8 +21,15 @@ const genId = (prefix) => `${prefix}${Date.now().toString(36).toUpperCase().slic
 // slot-based falls back to stock-based, since that's the more common
 // case and the safer default (a typo'd item_type shouldn't make a real
 // item register as permanently unavailable).
-const SLOT_BASED_TYPES = new Set(["service", "booking", "appointment"]);
+const SLOT_BASED_TYPES = new Set(["service", "booking", "appointment", "meeting"]);
 const isStockTracked = (itemType) => !SLOT_BASED_TYPES.has(String(itemType || "").toLowerCase());
+
+// Master switch (Bot.toolsConfig.sendCustomerEmails, default true) for every
+// customer-facing transactional email this file sends — order confirmation,
+// booking confirmation (with the real meeting link), payment-received, and
+// booking-cancelled. Checked before every send below so a bot owner can turn
+// it off entirely without touching individual call sites.
+const emailsEnabled = (bot) => bot?.toolsConfig?.sendCustomerEmails !== false;
 
 // Loads + decrypts the bot's connected Google Sheets credential, returns a
 // ready-to-use { accessToken, spreadsheetId }. Cached per bot object for the
@@ -82,6 +91,34 @@ const getRazorpayAuth = async (bot) => {
     : null;
   bot._razorpayAuthCache = auth;
   return auth;
+};
+
+// Loads the bot's connected Meeting Scheduling credential (full document —
+// meetingProviders.service.js needs the whole meetingScheduling sub-object,
+// not just a couple of fields). Returns null (not an error) when none is
+// connected, same convention as getRazorpayAuth.
+const getMeetingCredential = async (bot) => {
+  if (!bot.toolsConfig?.meetingCredentialId) return null;
+  if (bot._meetingCredCache !== undefined) return bot._meetingCredCache;
+
+  const cred = await IntegrationCredential.findOne({
+    _id: bot.toolsConfig.meetingCredentialId,
+    user: bot.user,
+    channel: "meeting_scheduling",
+  });
+  bot._meetingCredCache = cred || null;
+  return bot._meetingCredCache;
+};
+
+// A "Mentors" row is required for every bookable item_id under the
+// "meetings" purpose — it's what tells us WHO is being booked and WHICH
+// provider actually creates the meeting (services/meetingProviders.service.js).
+const resolveMentor = async (auth, itemId) => {
+  const mentor = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Mentors", "item_id", itemId);
+  if (!mentor) {
+    throw new ApiError(400, `No "Mentors" row found for item_id "${itemId}" — add one to the Mentors tab first (provider, host_name, host_email, ...).`);
+  }
+  return mentor;
 };
 
 // Finds (or creates) a Users row for the given phone/email, returns the
@@ -234,6 +271,18 @@ async function create_order(auth, args, ctx) {
     }
   }
 
+  // Order confirmation email — billing details + what was ordered, per the
+  // product spec. Fires for every order type (not just meetings); meeting
+  // bookings additionally get the richer sendBookingConfirmationEmail from
+  // book_meeting once the actual slot/link exists. Never blocks the order
+  // itself on email delivery — a bounced/misconfigured mailbox shouldn't
+  // fail the order.
+  if (emailsEnabled(ctx.bot) && user.email) {
+    botEmail.sendOrderConfirmationEmail({ bot: ctx.bot, to: user.email, billing: user, order, item }).catch((err) => {
+      logger.error(`[botTools] order confirmation email failed: ${err.message}`);
+    });
+  }
+
   return { ok: true, order_id: order.order_id, status: order.order_status, total_amount: order.total_amount, sheet_user_id: user.user_id };
 }
 
@@ -375,6 +424,64 @@ async function create_payment_link(auth, args, ctx) {
   };
 }
 
+// Fires payment-received (+ finalizes a meeting booking, if this order is
+// one) the moment a payment first flips to "success". Never blocks the
+// status response on email/meeting-creation trouble — those are reported
+// via logger, not thrown, since the payment itself already succeeded.
+async function finalizePaidOrder(auth, orderId, ctx) {
+  const order = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Orders", "order_id", orderId);
+  if (!order) return;
+  const item = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Items", "item_id", order.item_id);
+  const user = order.user_id ? await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Users", "user_id", order.user_id) : null;
+  const paymentsRows = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Payments");
+  const payment = paymentsRows.filter((p) => p.order_id === orderId).sort((a, b) => (a.payment_id < b.payment_id ? 1 : -1))[0];
+
+  let booking = null;
+  if (item && String(item.item_type).toLowerCase() === "meeting") {
+    booking = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Bookings", "order_id", orderId);
+    if (booking && booking.status === "pending_payment") {
+      try {
+        const mentor = await resolveMentor(auth, item.item_id);
+        const meetingCred = await getMeetingCredential(ctx.bot);
+        let created = { meeting_link: "", meeting_id: "", provider_status: "confirmed" };
+        if (meetingCred) {
+          created = await meetingProviders.createMeeting({
+            credential: meetingCred,
+            mentor,
+            item,
+            date: booking.date,
+            timeSlot: booking.time_slot,
+            attendee: { name: booking.attendee_name, email: booking.attendee_email, phone: booking.attendee_phone },
+          });
+        }
+        booking = await sheets.updateRowByKey(auth.accessToken, auth.spreadsheetId, "Bookings", "booking_id", booking.booking_id, {
+          meeting_link: created.meeting_link || "",
+          meeting_id: created.meeting_id || "",
+          status: "confirmed",
+          updated_at: new Date().toISOString(),
+        });
+        await sheets.updateRowByKey(auth.accessToken, auth.spreadsheetId, "Orders", "order_id", orderId, {
+          order_status: "confirmed",
+          updated_at: new Date().toISOString(),
+        });
+      } catch (err) {
+        logger.error(`[botTools] finalizing meeting for order ${orderId} failed: ${err.message}`);
+      }
+    }
+  }
+
+  if (emailsEnabled(ctx.bot) && user?.email) {
+    botEmail.sendPaymentReceivedEmail({ bot: ctx.bot, to: user.email, billing: user, order, payment, item, booking }).catch((err) => {
+      logger.error(`[botTools] payment-received email failed: ${err.message}`);
+    });
+    if (booking && booking.status === "confirmed") {
+      botEmail.sendBookingConfirmationEmail({ bot: ctx.bot, to: user.email, billing: user, order, booking, item, mentor: null }).catch((err) => {
+        logger.error(`[botTools] booking confirmation email failed: ${err.message}`);
+      });
+    }
+  }
+}
+
 async function verify_payment_status(auth, args, ctx) {
   const payments = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Payments");
   const payment = payments.filter((p) => p.order_id === args.order_id).sort((a, b) => (a.payment_id < b.payment_id ? 1 : -1))[0];
@@ -385,6 +492,7 @@ async function verify_payment_status(auth, args, ctx) {
     const link = await razorpayService.getPaymentLink({ ...razorpayAuth, paymentLinkId: payment.gateway_ref });
     const paidEntry = (link.payments || []).find((p) => p.status === "captured");
     const status = link.status === "paid" ? "success" : link.status === "expired" || link.status === "cancelled" ? "failed" : "pending";
+    const wasAlreadySuccess = payment.status === "success";
 
     await sheets.updateRowByKey(auth.accessToken, auth.spreadsheetId, "Payments", "payment_id", payment.payment_id, {
       status,
@@ -396,6 +504,7 @@ async function verify_payment_status(auth, args, ctx) {
         payment_status: "paid",
         updated_at: new Date().toISOString(),
       });
+      if (!wasAlreadySuccess) await finalizePaidOrder(auth, args.order_id, ctx);
     }
     return { found: true, status, amount: payment.amount, payment_link: payment.payment_link_url || null };
   }
@@ -439,6 +548,222 @@ async function initiate_refund(auth, args, ctx) {
     status: "refunded",
     note: "Logged for the team to action — no Razorpay account is connected, so this doesn't move money automatically.",
   };
+}
+
+// --- Meeting bookings (1-on-1s — Google Meet / Cal.com / Calendly) ---
+
+async function list_mentors(auth, args) {
+  const items = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Items");
+  const mentorRows = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Mentors");
+  const mentorByItem = new Map(mentorRows.map((m) => [m.item_id, m]));
+
+  const meetingItems = items.filter((r) => {
+    if (r.status && r.status !== "active") return false;
+    if (String(r.item_type).toLowerCase() !== "meeting") return false;
+    if (args.keyword) {
+      const kw = args.keyword.toLowerCase();
+      if (!`${r.name} ${r.description}`.toLowerCase().includes(kw)) return false;
+    }
+    return true;
+  });
+
+  return {
+    mentors: meetingItems.slice(0, 20).map((r) => {
+      const mentor = mentorByItem.get(r.item_id) || {};
+      return {
+        item_id: r.item_id,
+        name: r.name,
+        description: r.description,
+        price: r.price,
+        currency: r.currency || "INR",
+        duration_mins: r.duration_mins,
+        host_name: mentor.host_name || "",
+        provider: mentor.provider || "",
+      };
+    }),
+  };
+}
+
+async function book_meeting(auth, args, ctx) {
+  const item = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Items", "item_id", args.item_id);
+  if (!item) throw new ApiError(400, "That mentor/item wasn't found");
+
+  const mentor = await resolveMentor(auth, args.item_id);
+
+  const avail = await check_availability(auth, { item_id: args.item_id, qty_or_people: 1, date: args.date });
+  if (!avail.available) {
+    return { ok: false, message: "That date/slot isn't available.", ...avail };
+  }
+
+  if (!args.email) {
+    return { ok: false, message: "An email address is required to send the meeting confirmation/join link — please ask the customer for one." };
+  }
+
+  const user = await resolveOrCreateUser(auth, {
+    user_id: ctx.conversation?.visitor?.sheetUserId,
+    name: args.name || ctx.conversation?.visitor?.name,
+    phone: args.phone || ctx.conversation?.visitor?.phone,
+    email: args.email,
+  });
+  if (!user) return { ok: false, message: "Need at least a name, phone, or email to book this." };
+
+  const price = Number(item.price) || 0;
+  const now = new Date().toISOString();
+  const order = {
+    order_id: genId("ORD"),
+    user_id: user.user_id,
+    item_id: item.item_id,
+    qty_or_people: 1,
+    date_or_slot: `${args.date} / ${args.time_slot}`,
+    delivery_address: "",
+    total_amount: price,
+    order_status: price > 0 ? "pending" : "confirmed",
+    payment_status: price > 0 ? "unpaid" : "paid",
+    created_at: now,
+    updated_at: now,
+  };
+  await sheets.appendRow(auth.accessToken, auth.spreadsheetId, "Orders", order);
+
+  // hold the slot immediately — same as create_order's service path
+  const slots = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Availability");
+  const slot = slots.find((s) => s.item_id === item.item_id && (s.date === args.date || s.time_slot === args.time_slot));
+  if (slot) {
+    await sheets.updateRowByKey(auth.accessToken, auth.spreadsheetId, "Availability", "item_id", slot.item_id, {
+      booked_count: (Number(slot.booked_count) || 0) + 1,
+    });
+  }
+
+  const attendee = { name: user.name || args.name, email: args.email, phone: user.phone || args.phone };
+  let created = { meeting_link: "", meeting_id: "", provider_status: "confirmed" };
+  const meetingCred = await getMeetingCredential(ctx.bot);
+
+  if (price === 0) {
+    // Free — create the real meeting right away.
+    if (meetingCred) {
+      try {
+        created = await meetingProviders.createMeeting({ credential: meetingCred, mentor, item, date: args.date, timeSlot: args.time_slot, attendee });
+      } catch (err) {
+        logger.error(`[botTools] book_meeting provider create failed: ${err.message}`);
+        // still record the booking — the mentor/team can complete scheduling manually
+      }
+    }
+  }
+
+  const booking = {
+    booking_id: genId("MTG"),
+    order_id: order.order_id,
+    item_id: item.item_id,
+    user_id: user.user_id,
+    provider: mentor.provider || "",
+    date: args.date,
+    time_slot: args.time_slot,
+    timezone: mentor.timezone || "",
+    meeting_link: created.meeting_link || "",
+    meeting_id: created.meeting_id || "",
+    host_email: mentor.host_email || "",
+    attendee_name: attendee.name || "",
+    attendee_email: attendee.email || "",
+    attendee_phone: attendee.phone || "",
+    status: price > 0 ? "pending_payment" : "confirmed",
+    created_at: now,
+    updated_at: now,
+  };
+  await sheets.appendRow(auth.accessToken, auth.spreadsheetId, "Bookings", booking);
+
+  if (price === 0) {
+    if (emailsEnabled(ctx.bot)) {
+      botEmail.sendBookingConfirmationEmail({ bot: ctx.bot, to: attendee.email, billing: user, order, booking, item, mentor }).catch((err) => {
+        logger.error(`[botTools] booking confirmation email failed: ${err.message}`);
+      });
+    }
+    return {
+      ok: true,
+      order_id: order.order_id,
+      booking_id: booking.booking_id,
+      status: "confirmed",
+      meeting_link: booking.meeting_link || null,
+      note: booking.meeting_link ? undefined : "No meeting-scheduling provider is connected — share the meeting link with the customer manually once arranged.",
+    };
+  }
+
+  // Paid — create a real payment link (or fall back to pending bookkeeping),
+  // same behavior as create_payment_link. The actual meeting is only
+  // created once payment is verified (see finalizePaidOrder above), so we
+  // never book a real calendar slot before money changes hands.
+  const paymentResult = await create_payment_link(auth, { order_id: order.order_id, amount: price }, ctx);
+
+  return {
+    ok: true,
+    order_id: order.order_id,
+    booking_id: booking.booking_id,
+    status: "pending_payment",
+    ...paymentResult,
+  };
+}
+
+async function get_booking_details(auth, args) {
+  const booking = args.booking_id
+    ? await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Bookings", "booking_id", args.booking_id)
+    : args.order_id
+    ? await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Bookings", "order_id", args.order_id)
+    : null;
+  if (!booking) return { found: false };
+
+  const item = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Items", "item_id", booking.item_id);
+  return { found: true, booking, item_name: item?.name };
+}
+
+async function cancel_meeting_booking(auth, args, ctx) {
+  const booking = args.booking_id
+    ? await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Bookings", "booking_id", args.booking_id)
+    : args.order_id
+    ? await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Bookings", "order_id", args.order_id)
+    : null;
+  if (!booking) return { ok: false, message: "Booking not found" };
+  if (booking.status === "cancelled") return { ok: false, message: "This booking is already cancelled" };
+
+  const order = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Orders", "order_id", booking.order_id);
+  const item = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Items", "item_id", booking.item_id);
+  const user = booking.user_id ? await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Users", "user_id", booking.user_id) : null;
+
+  await sheets.updateRowByKey(auth.accessToken, auth.spreadsheetId, "Bookings", "booking_id", booking.booking_id, {
+    status: "cancelled",
+    updated_at: new Date().toISOString(),
+  });
+  if (order && !["cancelled", "completed"].includes(order.order_status)) {
+    await sheets.updateRowByKey(auth.accessToken, auth.spreadsheetId, "Orders", "order_id", booking.order_id, {
+      order_status: "cancelled",
+      updated_at: new Date().toISOString(),
+    });
+  }
+
+  // release the slot
+  const slots = await sheets.getRows(auth.accessToken, auth.spreadsheetId, "Availability");
+  const slot = slots.find((s) => s.item_id === booking.item_id && (s.date === booking.date || s.time_slot === booking.time_slot));
+  if (slot) {
+    await sheets.updateRowByKey(auth.accessToken, auth.spreadsheetId, "Availability", "item_id", slot.item_id, {
+      booked_count: Math.max(0, (Number(slot.booked_count) || 0) - 1),
+    });
+  }
+
+  // best-effort — cancel the real meeting/event too, if one exists
+  if (booking.meeting_id) {
+    try {
+      const mentor = await sheets.findRow(auth.accessToken, auth.spreadsheetId, "Mentors", "item_id", booking.item_id);
+      const meetingCred = await getMeetingCredential(ctx.bot);
+      if (meetingCred) await meetingProviders.cancelMeeting({ credential: meetingCred, mentor, provider: booking.provider, meetingId: booking.meeting_id });
+    } catch (err) {
+      logger.error(`[botTools] cancelling provider meeting failed: ${err.message}`);
+    }
+  }
+
+  if (emailsEnabled(ctx.bot) && user?.email) {
+    botEmail.sendBookingCancelledEmail({ bot: ctx.bot, to: user.email, billing: user, order, item }).catch((err) => {
+      logger.error(`[botTools] booking cancellation email failed: ${err.message}`);
+    });
+  }
+
+  return { ok: true, booking_id: booking.booking_id, status: "cancelled", refund_needed: order?.payment_status === "paid" };
 }
 
 async function capture_user_info(auth, args, ctx) {
@@ -519,6 +844,10 @@ const IMPLEMENTATIONS = {
   create_payment_link,
   verify_payment_status,
   initiate_refund,
+  list_mentors,
+  book_meeting,
+  get_booking_details,
+  cancel_meeting_booking,
   capture_user_info,
   get_user_profile,
   search_faq_kb,

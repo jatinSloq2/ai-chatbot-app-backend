@@ -214,13 +214,65 @@ const RazorpayCredentialSchema = new Schema(
   { _id: false }
 );
 
+// ---------- MEETING SCHEDULING (1-on-1 meeting bookings — Google Meet /
+// Cal.com / Calendly, see services/meetingProviders.service.js) ----------
+// One credential = one provider account. The bot's per-mentor scheduling
+// config (which item_id uses which provider, host email, event type, etc.)
+// still lives on the connected Google Sheet's "Mentors" tab, same spirit as
+// Items/Availability — this credential only holds the secret needed to
+// actually talk to that provider's API.
+const MeetingSchedulingCredentialSchema = new Schema(
+  {
+    provider: { type: String, enum: ["google_meet", "cal_com", "calendly"], required: true },
+
+    // --- google_meet ---
+    // Same "Connect Google" OAuth flow/credential as Email and Google
+    // Sheets — one sign-in, one consent screen (now also asking for the
+    // calendar.events scope, see config/oauthProviders.js) creates all
+    // three at once. Meetings are created directly on the connected
+    // account's own calendar via the Calendar API, so there's no separate
+    // service-account key to manage or calendar to manually share.
+    googleMeet: {
+      email: { type: String, trim: true, lowercase: true }, // which Google account was connected
+      accessToken: secretField,
+      refreshToken: secretField,
+      tokenExpiry: { type: Date },
+      calendarId: { type: String, trim: true, default: "primary" },
+      defaultTimezone: { type: String, trim: true, default: "Asia/Kolkata" },
+    },
+
+    // --- cal_com ---
+    // Cal.com API key (Settings → Developer → API Keys). We create real
+    // bookings against a specific event type via their public API.
+    calCom: {
+      apiKey: secretField,
+      baseUrl: { type: String, trim: true, default: "https://api.cal.com" },
+      username: { type: String, trim: true }, // cal.com/<username>
+    },
+
+    // --- calendly ---
+    // Calendly's public API doesn't support creating a booking on behalf of
+    // an invitee (only reading events/invitees), so for this provider we
+    // hand the customer a real Calendly scheduling link (pre-filled with
+    // their name/email) instead of booking the slot ourselves — the
+    // Personal Access Token is only used to verify the connection and look
+    // up the account's scheduling URL.
+    calendly: {
+      apiToken: secretField,
+      organizationUri: { type: String, trim: true },
+      schedulingBaseUrl: { type: String, trim: true }, // e.g. https://calendly.com/your-handle
+    },
+  },
+  { _id: false }
+);
+
 const IntegrationCredentialSchema = new Schema(
   {
     user: { type: Schema.Types.ObjectId, ref: "User", required: true, index: true },
 
     channel: {
       type: String,
-      enum: ["email", "whatsapp", "sms", "ai_provider", "google_sheets", "razorpay"],
+      enum: ["email", "whatsapp", "sms", "ai_provider", "google_sheets", "razorpay", "meeting_scheduling"],
       required: true,
       index: true,
     },
@@ -236,6 +288,7 @@ const IntegrationCredentialSchema = new Schema(
     aiProvider: AiProviderCredentialSchema,
     googleSheets: GoogleSheetsCredentialSchema,
     razorpay: RazorpayCredentialSchema,
+    meetingScheduling: MeetingSchedulingCredentialSchema,
 
     status: {
       type: String,
@@ -260,6 +313,7 @@ IntegrationCredentialSchema.pre("validate", function (next) {
     ai_provider: "aiProvider",
     google_sheets: "googleSheets",
     razorpay: "razorpay",
+    meeting_scheduling: "meetingScheduling",
   };
   const requiredField = channelFieldMap[this.channel];
   if (!this[requiredField]) {

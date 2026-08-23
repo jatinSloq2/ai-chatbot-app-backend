@@ -23,12 +23,13 @@ const { protect } = require("../middlewares/auth.middleware");
  *     tags: [OAuth]
  *     summary: Begin the Google OAuth2 consent flow
  *     description: |
- *       Redirects the browser to Google's consent screen. The grant covers both **Email**
- *       (Gmail send-as) and **Google Sheets** scopes. After the user grants, Google
- *       redirects back to `/api/oauth/google/callback`.
+ *       Redirects the browser to Google's consent screen. The grant covers **Email**
+ *       (Gmail send-as), **Google Sheets**, and **Google Meet** (calendar.events) scopes.
+ *       After the user grants, Google redirects back to `/api/oauth/google/callback`.
  *
- *       Optional query: `?intent=sheets` returns the user to the Google Sheets tab on
- *       completion instead of the Email credentials tab.
+ *       Optional query: `?intent=sheets` or `?intent=meetings` returns the user to the
+ *       Google Sheets / Meeting Scheduling tab on completion instead of the Email
+ *       credentials tab.
  *     responses:
  *       302:
  *         description: Redirect to Google consent screen

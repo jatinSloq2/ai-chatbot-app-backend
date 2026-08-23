@@ -9,6 +9,7 @@ const CHANNEL_FIELD = {
   ai_provider: "aiProvider",
   google_sheets: "googleSheets",
   razorpay: "razorpay",
+  meeting_scheduling: "meetingScheduling",
 };
 
 const getOwnedCredential = async (id, userId) => {

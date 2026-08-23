@@ -260,6 +260,46 @@ async function testRazorpay(cred) {
   await razorpayService.getClient(r.keyId, r.keySecret).orders.all({ count: 1 });
 }
 
+// ---------------- MEETING SCHEDULING ----------------
+
+async function testMeetingScheduling(cred) {
+  const m = cred.meetingScheduling || {};
+
+  if (m.provider === "google_meet") {
+    // Connected via the same "Connect Google" OAuth flow as Email/Sheets —
+    // just confirm the stored token is still valid/refreshable and can
+    // actually reach the Calendar API (a dead/revoked refresh token is
+    // exactly the kind of thing this test should catch).
+    const googleMeetOauth = require("./googleMeetOauth.service");
+    const accessToken = await googleMeetOauth.getValidAccessToken(cred);
+    await axios.get("https://www.googleapis.com/calendar/v3/calendars/primary", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 10000,
+    });
+    return;
+  }
+
+  if (m.provider === "cal_com") {
+    const c = m.calCom || {};
+    if (!c.apiKey) throw new Error("API key is required");
+    const baseUrl = (c.baseUrl || "https://api.cal.com").replace(/\/$/, "");
+    await axios.get(`${baseUrl}/v1/event-types`, { params: { apiKey: c.apiKey }, timeout: 10000 });
+    return;
+  }
+
+  if (m.provider === "calendly") {
+    const cal = m.calendly || {};
+    if (!cal.apiToken) throw new Error("Personal access token is required");
+    await axios.get("https://api.calendly.com/users/me", {
+      headers: { Authorization: `Bearer ${cal.apiToken}` },
+      timeout: 10000,
+    });
+    return;
+  }
+
+  throw new Error("Unsupported meeting scheduling provider");
+}
+
 async function runConnectionTest(cred) {
   if (cred.channel === "email") return testEmail(cred);
   if (cred.channel === "whatsapp") return testWhatsapp(cred);
@@ -267,6 +307,7 @@ async function runConnectionTest(cred) {
   if (cred.channel === "ai_provider") return testAiProvider(cred);
   if (cred.channel === "google_sheets") return testGoogleSheets(cred);
   if (cred.channel === "razorpay") return testRazorpay(cred);
+  if (cred.channel === "meeting_scheduling") return testMeetingScheduling(cred);
   throw new Error("Unknown channel");
 }
 

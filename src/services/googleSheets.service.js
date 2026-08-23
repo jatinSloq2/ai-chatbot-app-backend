@@ -39,6 +39,30 @@ const REQUIRED_TABS = {
     "gateway_ref", "gateway_payment_id", "payment_link_url",
   ],
   Tickets: ["ticket_id", "user_id", "order_id", "category", "description", "status", "created_at"],
+
+  // Per-mentor 1-on-1 meeting scheduling config. One row per item_id in
+  // Items (item_type "meeting") — this is the "maintained by the user
+  // through their sheet" config the master spec's booking tools read to
+  // know WHO is being booked and WHICH provider actually creates the
+  // meeting. Available days/times for that item_id still live in the
+  // Availability tab, same as any other bookable item — no separate slot
+  // tab needed. See services/meetingProviders.service.js.
+  Mentors: [
+    "item_id", "provider", "host_name", "host_email", "timezone",
+    "meeting_title", "buffer_mins", "calendar_id",
+    "calendly_event_url", "cal_username", "cal_event_type_id",
+    "notes", "status",
+  ],
+  // One row per confirmed/pending 1-on-1 meeting booking. Separate from
+  // Orders (which stays generic for products/services) so the real
+  // meeting join link + provider bookkeeping has somewhere to live without
+  // bloating every non-meeting order row.
+  Bookings: [
+    "booking_id", "order_id", "item_id", "user_id", "provider",
+    "date", "time_slot", "timezone", "meeting_link", "meeting_id",
+    "host_email", "attendee_name", "attendee_email", "attendee_phone",
+    "status", "created_at", "updated_at",
+  ],
 };
 
 // Accepts either a bare spreadsheet ID or a full

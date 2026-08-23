@@ -22,6 +22,11 @@ const GOOGLE = {
         "profile",
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/spreadsheets",
+        // Also powers the "meetings" purpose's Google Meet provider —
+        // creating/cancelling calendar events (with an auto-generated Meet
+        // link) on this same connected account. One sign-in, one consent
+        // screen covers all three (see oauth.controller.js).
+        "https://www.googleapis.com/auth/calendar.events",
     ].join(" "),
 };
 

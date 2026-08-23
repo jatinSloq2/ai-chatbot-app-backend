@@ -89,6 +89,21 @@ const { protect } = require("../middlewares/auth.middleware");
  *         keyId: { type: string, example: rzp_test_xxxx }
  *         keySecret: { type: string, format: password }
  *         webhookSecret: { type: string, format: password }
+ *     MeetingSchedulingRequest:
+ *       type: object
+ *       description: |
+ *         Google Meet is NOT created via this endpoint — it's populated automatically by the
+ *         shared "Connect Google" OAuth flow (`routes/oauth.routes.js`), same as Email/Sheets.
+ *         Use this endpoint for cal_com or calendly only.
+ *       required: [provider]
+ *       properties:
+ *         label: { type: string }
+ *         provider: { type: string, enum: [cal_com, calendly] }
+ *         apiKey: { type: string, format: password, description: "cal_com only" }
+ *         baseUrl: { type: string, description: "cal_com only, defaults to https://api.cal.com" }
+ *         username: { type: string, description: "cal_com only — cal.com/<username>" }
+ *         apiToken: { type: string, format: password, description: "calendly only — Personal Access Token" }
+ *         schedulingBaseUrl: { type: string, description: "calendly only, e.g. https://calendly.com/your-handle" }
  *     UpdateCredentialRequest:
  *       type: object
  *       description: "Patch any subset of the credential's fields."
@@ -412,6 +427,24 @@ router.delete("/google-sheets/:id/sheets/:sheetId", credentialController.removeS
  *       401: { $ref: "#/components/responses/Unauthorized" }
  */
 router.post("/razorpay", credentialController.createRazorpay);
+
+/**
+ * @openapi
+ * /api/credentials/meeting-scheduling:
+ *   post:
+ *     tags: [Integrations]
+ *     summary: Connect a meeting-scheduling provider for 1-on-1 bookings (cal_com or calendly — Google Meet connects via OAuth instead)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema: { $ref: "#/components/schemas/MeetingSchedulingRequest" }
+ *     responses:
+ *       201: { description: Created }
+ *       400: { $ref: "#/components/responses/ValidationError" }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ */
+router.post("/meeting-scheduling", credentialController.createMeetingScheduling);
 
 /**
  * @openapi

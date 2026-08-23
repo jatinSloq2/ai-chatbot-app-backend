@@ -1,21 +1,24 @@
 const asyncHandler = require("../utils/asyncHandler");
 const oauthService = require("../services/emailOauth.service");
 const sheetsOauthService = require("../services/googleSheetsOauth.service");
+const meetOauthService = require("../services/googleMeetOauth.service");
 
 const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
 const REDIRECT_BACK = (params) => `${CLIENT_URL}/credentials?${new URLSearchParams(params).toString()}`;
 
 // GET /api/oauth/google/init  (protected — needs a logged-in user)
-// One flow, both permissions: the consent screen asks for gmail.send AND
-// spreadsheets together (see config/oauthProviders.js), so connecting
-// Google once is enough to power both the Email channel and the bot Tools'
-// Google Sheets data layer — no separate "Connect Sheets" OAuth flow.
+// One flow, all permissions: the consent screen asks for gmail.send,
+// spreadsheets, AND calendar.events together (see config/oauthProviders.js),
+// so connecting Google once is enough to power the Email channel, the bot
+// Tools' Google Sheets data layer, AND the Google Meet meeting-scheduling
+// provider — no separate "Connect Sheets"/"Connect Meet" OAuth flows.
 //
-// `?intent=sheets` (passed by the "Connect with Google" button on the
-// Google Sheets tab) just controls which tab/follow-up the user lands back
-// on afterwards — it does not change what's requested or granted.
+// `?intent=sheets|meetings` (passed by the "Connect with Google" button on
+// the Google Sheets / Meeting Scheduling tabs) just controls which
+// tab/follow-up the user lands back on afterwards — it does not change what's
+// requested or granted.
 const initGoogle = asyncHandler(async (req, res) => {
-  const intent = req.query.intent === "sheets" ? "sheets" : "email";
+  const intent = ["sheets", "meetings"].includes(req.query.intent) ? req.query.intent : "email";
   const url = oauthService.buildAuthUrl("google", String(req.user._id), { intent });
   res.redirect(url);
 });
@@ -53,6 +56,12 @@ const handleCallback = (provider) =>
         // existing one" without asking the user to sign in again.
         const sheetsCred = await sheetsOauthService.upsertOauthCredential({ userId, tokenData, email });
         extraParams.sheetsCredentialId = String(sheetsCred._id);
+        // ...and the Google Meet meeting-scheduling credential too — same
+        // token, same consent, now also covering calendar.events (see
+        // config/oauthProviders.js). Ready to use for the "meetings"
+        // purpose's book_meeting tool immediately, no separate connect step.
+        const meetCred = await meetOauthService.upsertOauthCredential({ userId, tokenData, email });
+        extraParams.meetingCredentialId = String(meetCred._id);
         if (intent) extraParams.intent = intent;
       }
 

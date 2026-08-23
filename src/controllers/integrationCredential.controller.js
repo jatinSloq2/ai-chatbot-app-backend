@@ -17,6 +17,12 @@ const SECRET_PATHS = {
   ai_provider: ["aiProvider.apiKey", "aiProvider.serviceAccountJson"],
   google_sheets: ["googleSheets.serviceAccountJson", "googleSheets.oauth.accessToken", "googleSheets.oauth.refreshToken"],
   razorpay: ["razorpay.keySecret", "razorpay.webhookSecret"],
+  meeting_scheduling: [
+    "meetingScheduling.googleMeet.accessToken",
+    "meetingScheduling.googleMeet.refreshToken",
+    "meetingScheduling.calCom.apiKey",
+    "meetingScheduling.calendly.apiToken",
+  ],
 };
 
 function getPath(obj, path) {
@@ -63,6 +69,7 @@ const sanitizeCredential = (doc) => {
     aiProvider: cred.aiProvider,
     googleSheets: cred.googleSheets,
     razorpay: cred.razorpay,
+    meetingScheduling: cred.meetingScheduling,
     hasSecrets, // lets the frontend show "a key is saved" without ever seeing it
     createdAt: cred.createdAt,
     updatedAt: cred.updatedAt,
@@ -295,6 +302,41 @@ const createRazorpay = asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, data: { credential: sanitizeCredential(cred) } });
 });
 
+// POST /api/credentials/meeting-scheduling
+// body: { label?, isDefault?, provider: "cal_com"|"calendly", ...providerFields }
+// Google Meet is NOT created here — it's populated automatically as part of
+// the shared "Connect Google" OAuth flow (see oauth.controller.js), same as
+// Email/Sheets, so there's nothing to paste for that provider.
+const createMeetingScheduling = asyncHandler(async (req, res) => {
+  const { label, isDefault, provider } = req.body;
+
+  if (provider === "google_meet") {
+    throw new ApiError(400, 'Google Meet connects via "Connect with Google" (Credentials → Meeting Scheduling) — there\'s nothing to paste here.');
+  }
+
+  let payload;
+  if (provider === "cal_com") {
+    const { apiKey, baseUrl, username } = req.body;
+    if (!apiKey?.trim()) throw new ApiError(400, "apiKey is required");
+    payload = { provider, calCom: { apiKey, baseUrl, username } };
+  } else if (provider === "calendly") {
+    const { apiToken, organizationUri, schedulingBaseUrl } = req.body;
+    if (!apiToken?.trim()) throw new ApiError(400, "apiToken is required");
+    payload = { provider, calendly: { apiToken, organizationUri, schedulingBaseUrl } };
+  } else {
+    throw new ApiError(400, 'provider must be "cal_com" or "calendly"');
+  }
+
+  const cred = await credentialService.createCredential({
+    userId: req.user._id,
+    channel: "meeting_scheduling",
+    label,
+    isDefault,
+    payload,
+  });
+  res.status(201).json({ success: true, data: { credential: sanitizeCredential(cred) } });
+});
+
 // PATCH /api/credentials/:id  — generic update (label, isActive, isDefault, channel fields)
 const updateCredential = asyncHandler(async (req, res) => {
   const { label, isActive, isDefault, ...rest } = req.body;
@@ -339,6 +381,7 @@ module.exports = {
   renameSheetForCredential,
   removeSheetForCredential,
   createRazorpay,
+  createMeetingScheduling,
   updateCredential,
   setDefault,
   deleteCredential,
