@@ -733,7 +733,7 @@ const receiveWebhook = asyncHandler(async (req, res) => {
 
     // Relay the exact payload onward — fire-and-forget, independent of
     // everything else this request does with it.
-    forwardRawWebhook(rawBody, signatureHeader);
+    // forwardRawWebhook(rawBody, signatureHeader);
 
     for (const entry of entries) {
         const wabaId = entry.id || null;
