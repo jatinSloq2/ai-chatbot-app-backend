@@ -135,6 +135,58 @@ const widgetCors = cors({
  *                   items: { $ref: "#/components/schemas/Document" }
  */
 router.post("/documents", requireBotSecretKey, documentController.addDocument);
+
+/**
+ * @openapi
+ * /api/v1/documents/upload:
+ *   post:
+ *     tags: [Public Developer API]
+ *     summary: Add RAG data by uploading a file (PDF, DOCX, TXT, CSV, or MD)
+ *     description: |
+ *       Extracts text server-side (see `fileLoader.service.js`) and ingests it the same way as
+ *       `POST /api/v1/documents` — the API responds immediately with `status: "processing"` and the
+ *       BullMQ worker flips it to `"ready"` once chunking + embedding completes.
+ *
+ *       Allowed extensions: `pdf`, `docx`, `txt`, `csv`, `md`. Max file size: 15MB.
+ *     security:
+ *       - botSecretKey: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [file]
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: The document file to upload (field name must be "file").
+ *               title:
+ *                 type: string
+ *                 description: Optional display title; defaults to the uploaded filename.
+ *     responses:
+ *       201:
+ *         description: File received and queued for processing
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean }
+ *                 message: { type: string, example: "File received and is being processed (chunking + embedding in progress)" }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     document: { $ref: "#/components/schemas/Document" }
+ *       400:
+ *         description: No file uploaded, unsupported file type, or no extractable text
+ *         content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ *       403:
+ *         description: Plan document limit reached
+ *         content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+ */
 router.post("/documents/upload", requireBotSecretKey, upload.single("file"), documentController.uploadDocument);
 router.get("/documents", requireBotSecretKey, documentController.listDocuments);
 
