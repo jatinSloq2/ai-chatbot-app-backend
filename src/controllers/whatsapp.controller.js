@@ -21,6 +21,53 @@ const {
     isHandoverSentinelResponse,
 } = require("../utils/handoverIntent");
 
+// ---------------------------------------------------------------------------
+// Internal event forwarding — relays the EXACT raw payload Meta sent us,
+// byte-for-byte, to another internal endpoint. The receiver sees the same
+// body and the same X-Hub-Signature-256 header we got, as if Meta had hit
+// it directly — no reshaping, no summarizing.
+//
+//   INTERNAL_WEBHOOK_FORWARD_URL - full URL of the receiving endpoint
+//
+// Best-effort and fire-and-forget: forwarding must never block or fail our
+// own webhook processing — Meta has already been ack'd 200 by the time this
+// runs, and the bot pipeline doesn't wait on it either.
+// ---------------------------------------------------------------------------
+const FORWARD_URL = process.env.INTERNAL_WEBHOOK_FORWARD_URL || null;
+const FORWARD_TIMEOUT_MS = 5000;
+
+const forwardRawWebhook = async (rawBody, signatureHeader) => {
+    if (!FORWARD_URL) return; // forwarding not configured — no-op
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FORWARD_TIMEOUT_MS);
+
+    try {
+        const res = await fetch(FORWARD_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                // Pass through Meta's own signature header untouched — the
+                // receiving endpoint gets exactly what we got and can verify
+                // it the same way isValidSignature() does here, against the
+                // same tenant App Secret if it has access to it.
+                ...(signatureHeader ? { "X-Hub-Signature-256": signatureHeader } : {}),
+            },
+            body: rawBody, // the untouched Buffer — not re-serialized JSON
+            signal: controller.signal,
+        });
+
+        if (!res.ok) {
+            logger.warn(`[whatsapp] Forward to internal endpoint returned HTTP ${res.status}`);
+        }
+    } catch (err) {
+        // Down/slow internal endpoint should never affect webhook processing.
+        logger.warn(`[whatsapp] Failed to forward raw webhook: ${err.message}`);
+    } finally {
+        clearTimeout(timeout);
+    }
+};
+
 /**
  * GET /api/whatsapp/webhook
  *
@@ -683,6 +730,10 @@ const receiveWebhook = asyncHandler(async (req, res) => {
     // the RAG+LLM+send pipeline) can take a few seconds, and Meta must never
     // be kept waiting on it or it starts retrying/backing off the webhook.
     res.sendStatus(200);
+
+    // Relay the exact payload onward — fire-and-forget, independent of
+    // everything else this request does with it.
+    forwardRawWebhook(rawBody, signatureHeader);
 
     for (const entry of entries) {
         const wabaId = entry.id || null;
