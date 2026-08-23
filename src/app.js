@@ -16,6 +16,8 @@ const swaggerSpec = require("./config/swagger");
 
 const app = express();
 
+const isProdEnv = process.env.NODE_ENV === "production";
+
 app.set("trust proxy", 1);
 
 app.use(
@@ -184,13 +186,68 @@ app.get("/health", (req, res) => {
 // Mounted under /api so it lives next to the documented routes. The raw spec
 // is served at /api/docs.json so Postman / Insomnia / external doc tools
 // can import it without going through the UI.
-app.get("/api/docs.json", (req, res) => {
+//
+// Gated behind HTTP Basic Auth — this spec documents every internal route,
+// header, and schema in the system, which is exactly the kind of recon an
+// attacker wants, so it shouldn't be publicly world-readable in production.
+// Credentials come from env vars; set them in Render's dashboard as
+// SWAGGER_USER / SWAGGER_PASSWORD. If either is unset in production, the
+// docs are disabled entirely rather than silently left open.
+const docsBasicAuth = (req, res, next) => {
+  const user = process.env.SWAGGER_USER;
+  const pass = process.env.SWAGGER_PASSWORD;
+
+  if (!user || !pass) {
+    if (isProdEnv) {
+      // Fail closed: no credentials configured in production means no docs,
+      // not "open to everyone".
+      return res.status(404).json({ success: false, message: "Not found" });
+    }
+    // Local dev with no creds set — don't force auth on every developer's laptop.
+    return next();
+  }
+
+  const header = req.headers.authorization || "";
+  const [scheme, encoded] = header.split(" ");
+
+  if (scheme === "Basic" && encoded) {
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+    const sepIndex = decoded.indexOf(":");
+    const reqUser = decoded.slice(0, sepIndex);
+    const reqPass = decoded.slice(sepIndex + 1);
+
+    // Constant-time comparison so response timing can't be used to guess
+    // the credentials one character at a time.
+    const crypto = require("crypto");
+    const userBuf = Buffer.from(reqUser);
+    const passBuf = Buffer.from(reqPass);
+    const expectedUserBuf = Buffer.from(user);
+    const expectedPassBuf = Buffer.from(pass);
+
+    const userMatches =
+      userBuf.length === expectedUserBuf.length &&
+      crypto.timingSafeEqual(userBuf, expectedUserBuf);
+    const passMatches =
+      passBuf.length === expectedPassBuf.length &&
+      crypto.timingSafeEqual(passBuf, expectedPassBuf);
+
+    if (userMatches && passMatches) {
+      return next();
+    }
+  }
+
+  res.setHeader("WWW-Authenticate", 'Basic realm="JestBot API Docs"');
+  return res.status(401).json({ success: false, message: "Authentication required" });
+};
+
+app.get("/api/docs.json", docsBasicAuth, (req, res) => {
   res.setHeader("Content-Type", "application/json");
   res.send(swaggerSpec);
 });
 
 app.use(
   "/api/docs",
+  docsBasicAuth,
   swaggerUi.serve,
   swaggerUi.setup(swaggerSpec, {
     customSiteTitle: "JestBot API Docs",
