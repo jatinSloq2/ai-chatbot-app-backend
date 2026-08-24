@@ -22,22 +22,31 @@ const {
 } = require("../utils/handoverIntent");
 
 // ---------------------------------------------------------------------------
-// Internal event forwarding — relays the EXACT raw payload Meta sent us,
-// byte-for-byte, to another internal endpoint. The receiver sees the same
-// body and the same X-Hub-Signature-256 header we got, as if Meta had hit
-// it directly — no reshaping, no summarizing.
+// Internal event forwarding — relays the EXACT raw Meta payload to Jesty's
+// /api/webhook endpoint, byte-for-byte. Jesty does NOT verify Meta's
+// hub.verify_token/signature — it trusts us via a shared secret instead
+// (see verifyForwardSecret in Jesty's webhook.controller.ts), so we send
+// that secret as x-webhook-secret rather than passing through
+// X-Hub-Signature-256.
 //
-//   INTERNAL_WEBHOOK_FORWARD_URL - full URL of the receiving endpoint
+//   INTERNAL_WEBHOOK_FORWARD_URL    - Jesty's POST /api/webhook URL
+//   INTERNAL_WEBHOOK_FORWARD_SECRET - must match Jesty's INTERNAL_WEBHOOK_SECRET
 //
 // Best-effort and fire-and-forget: forwarding must never block or fail our
 // own webhook processing — Meta has already been ack'd 200 by the time this
 // runs, and the bot pipeline doesn't wait on it either.
 // ---------------------------------------------------------------------------
 const FORWARD_URL = process.env.INTERNAL_WEBHOOK_FORWARD_URL || null;
+const FORWARD_SECRET = process.env.INTERNAL_WEBHOOK_FORWARD_SECRET || null;
 const FORWARD_TIMEOUT_MS = 5000;
 
-const forwardRawWebhook = async (rawBody, signatureHeader) => {
+const forwardRawWebhook = async (rawBody) => {
     if (!FORWARD_URL) return; // forwarding not configured — no-op
+
+    if (!FORWARD_SECRET) {
+        logger.warn("[whatsapp] INTERNAL_WEBHOOK_FORWARD_SECRET is not set — skipping forward to Jesty");
+        return;
+    }
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FORWARD_TIMEOUT_MS);
@@ -47,22 +56,20 @@ const forwardRawWebhook = async (rawBody, signatureHeader) => {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                // Pass through Meta's own signature header untouched — the
-                // receiving endpoint gets exactly what we got and can verify
-                // it the same way isValidSignature() does here, against the
-                // same tenant App Secret if it has access to it.
-                ...(signatureHeader ? { "X-Hub-Signature-256": signatureHeader } : {}),
+                // This is what Jesty's verifyForwardSecret middleware checks —
+                // NOT Meta's own X-Hub-Signature-256, which Jesty never sees.
+                "x-webhook-secret": FORWARD_SECRET,
             },
-            body: rawBody, // the untouched Buffer — not re-serialized JSON
+            body: rawBody, // untouched Buffer — same shape as Meta's own body
             signal: controller.signal,
         });
 
         if (!res.ok) {
-            logger.warn(`[whatsapp] Forward to internal endpoint returned HTTP ${res.status}`);
+            logger.warn(`[whatsapp] Forward to Jesty returned HTTP ${res.status}`);
         }
     } catch (err) {
-        // Down/slow internal endpoint should never affect webhook processing.
-        logger.warn(`[whatsapp] Failed to forward raw webhook: ${err.message}`);
+        // Down/slow Jesty should never affect our own webhook processing.
+        logger.warn(`[whatsapp] Failed to forward raw webhook to Jesty: ${err.message}`);
     } finally {
         clearTimeout(timeout);
     }
@@ -733,7 +740,7 @@ const receiveWebhook = asyncHandler(async (req, res) => {
 
     // Relay the exact payload onward — fire-and-forget, independent of
     // everything else this request does with it.
-    // forwardRawWebhook(rawBody, signatureHeader);
+    forwardRawWebhook(rawBody, signatureHeader);
 
     for (const entry of entries) {
         const wabaId = entry.id || null;
