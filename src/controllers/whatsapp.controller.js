@@ -20,60 +20,12 @@ const {
     withHandoverSentinelInstruction,
     isHandoverSentinelResponse,
 } = require("../utils/handoverIntent");
-
-// ---------------------------------------------------------------------------
-// Internal event forwarding — relays the EXACT raw Meta payload to Jesty's
-// /api/webhook endpoint, byte-for-byte. Jesty does NOT verify Meta's
-// hub.verify_token/signature — it trusts us via a shared secret instead
-// (see verifyForwardSecret in Jesty's webhook.controller.ts), so we send
-// that secret as x-webhook-secret rather than passing through
-// X-Hub-Signature-256.
-//
-//   INTERNAL_WEBHOOK_FORWARD_URL    - Jesty's POST /api/webhook URL
-//   INTERNAL_WEBHOOK_FORWARD_SECRET - must match Jesty's INTERNAL_WEBHOOK_SECRET
-//
-// Best-effort and fire-and-forget: forwarding must never block or fail our
-// own webhook processing — Meta has already been ack'd 200 by the time this
-// runs, and the bot pipeline doesn't wait on it either.
-// ---------------------------------------------------------------------------
-const FORWARD_URL = process.env.INTERNAL_WEBHOOK_FORWARD_URL || null;
-const FORWARD_SECRET = process.env.INTERNAL_WEBHOOK_FORWARD_SECRET || null;
-const FORWARD_TIMEOUT_MS = 5000;
-
-const forwardRawWebhook = async (rawBody) => {
-    if (!FORWARD_URL) return; // forwarding not configured — no-op
-
-    if (!FORWARD_SECRET) {
-        logger.warn("[whatsapp] INTERNAL_WEBHOOK_FORWARD_SECRET is not set — skipping forward to Jesty");
-        return;
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FORWARD_TIMEOUT_MS);
-
-    try {
-        const res = await fetch(FORWARD_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                // This is what Jesty's verifyForwardSecret middleware checks —
-                // NOT Meta's own X-Hub-Signature-256, which Jesty never sees.
-                "x-webhook-secret": FORWARD_SECRET,
-            },
-            body: rawBody, // untouched Buffer — same shape as Meta's own body
-            signal: controller.signal,
-        });
-
-        if (!res.ok) {
-            logger.warn(`[whatsapp] Forward to Jesty returned HTTP ${res.status}`);
-        }
-    } catch (err) {
-        // Down/slow Jesty should never affect our own webhook processing.
-        logger.warn(`[whatsapp] Failed to forward raw webhook to Jesty: ${err.message}`);
-    } finally {
-        clearTimeout(timeout);
-    }
-};
+// Forwarding to Jesty (the internal-events sink) now lives in its own
+// module — shared with whatsappSender.service.js, which needs the same
+// FORWARD_URL/FORWARD_SECRET plumbing to relay OUTBOUND sends (AI replies,
+// agent replies, system notices) the same way this file relays INBOUND raw
+// webhooks. See internalForward.service.js for the full picture.
+const { forwardRawWebhook } = require("../services/internalForward.service");
 
 /**
  * GET /api/whatsapp/webhook
@@ -381,7 +333,7 @@ const handleInboundInteractive = async ({ phoneNumberId, from, replyId }) => {
 
     const thankYou = bot.agentConfig?.csatThankYouMessage || "Thanks for the feedback!";
     try {
-        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: thankYou });
+        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: thankYou, sentBy: "ai" });
     } catch (err) {
         logger.error(`[whatsapp] Failed to send CSAT thank-you to ${from}: ${err.message}`);
     }
@@ -419,6 +371,7 @@ const handleInboundMedia = async ({ phoneNumberId, from, mediaId, mediaType, cap
             await whatsappSender.sendWhatsappText(credential.whatsapp, {
                 to: from,
                 message: "I couldn't download that attachment — mind resending it?",
+                sentBy: "ai",
             });
         } catch (sendErr) {
             logger.error(`[whatsapp] Also failed to notify ${from} of the download failure: ${sendErr.message}`);
@@ -455,6 +408,7 @@ const handleInboundMedia = async ({ phoneNumberId, from, mediaId, mediaType, cap
         await whatsappSender.sendWhatsappText(credential.whatsapp, {
             to: from,
             message: `Got your ${mediaType || "file"} — let me know if you have a question about it!`,
+            sentBy: "ai",
         });
     } catch (err) {
         logger.error(`[whatsapp] Failed to send media-received ack to ${from}: ${err.message}`);
@@ -488,6 +442,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skip
             await whatsappSender.sendWhatsappText(credential.whatsapp, {
                 to: from,
                 message: "I can only read text messages right now — could you type that out for me?",
+                sentBy: "ai",
             });
         } catch (err) {
             logger.error(`[whatsapp] Failed to send unsupported-media notice to ${from}: ${err.message}`);
@@ -626,7 +581,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skip
                 });
                 conversation.messages.push({ role: "assistant", content: fullResponse });
                 await conversation.save();
-                await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: fullResponse });
+                await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: fullResponse, sentBy: "ai" });
             }
             return;
         }
@@ -635,7 +590,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skip
         conversation.messages.push({ role: "assistant", content: fullResponse });
         await conversation.save();
 
-        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: fullResponse });
+        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: fullResponse, sentBy: "ai" });
     } catch (err) {
         success = false;
         errorMessage = err.message;
@@ -644,6 +599,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skip
             await whatsappSender.sendWhatsappText(credential.whatsapp, {
                 to: from,
                 message: "Sorry, something went wrong on our end. Please try again in a moment.",
+                sentBy: "ai",
             });
         } catch (sendErr) {
             logger.error(`[whatsapp] Also failed to send the apology to ${from}: ${sendErr.message}`);

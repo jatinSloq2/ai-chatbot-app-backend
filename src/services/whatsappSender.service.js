@@ -1,4 +1,11 @@
 const axios = require("axios");
+// Every outbound WhatsApp send funnels through this file (AI/bot replies
+// from whatsapp.controller.js, human-agent replies relayed via
+// handover.service.js#relayToWhatsappIfNeeded, CSAT thank-yous, etc.) — so
+// this is the one place that can reliably forward EVERY outbound message to
+// Jesty, the same way inbound webhooks already are. See
+// internalForward.service.js for the full picture.
+const { forwardOutboundMessage } = require("./internalForward.service");
 
 const GRAPH_VERSION = "v25.0";
 
@@ -82,28 +89,58 @@ const toAbsoluteUrl = (maybeRelativeUrl) => {
     return `${PUBLIC_BASE_URL}${maybeRelativeUrl.startsWith("/") ? "" : "/"}${maybeRelativeUrl}`;
 };
 
-async function sendWhatsappText(cred, { to, message }) {
+// `sentBy` identifies who/what triggered this send — "ai" for the bot
+// pipeline's own replies/notices, or the sending agent's id for a
+// handover reply — and is passed straight through to Jesty so it can
+// populate Message.sentBy without us having to guess. Optional: omitted
+// (undefined) for call sites that don't know/care (Jesty just stores null).
+async function sendWhatsappText(cred, { to, message, sentBy }) {
     const { phoneNumberId, accessToken } = requireCred(cred);
     if (!to) throw new Error("A destination WhatsApp number is required");
     if (!message?.trim()) throw new Error("message is required");
 
     const formatted = markdownToWhatsApp(message);
 
-    const { data } = await axios.post(
-        `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`,
-        {
-            messaging_product: "whatsapp",
-            recipient_type: "individual",
-            to,
-            type: "text",
-            text: { preview_url: true, body: formatted },
-        },
-        {
-            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-            timeout: 15000,
-        }
-    );
-    return { id: data?.messages?.[0]?.id || null };
+    let data;
+    let sendError = null;
+    try {
+        ({ data } = await axios.post(
+            `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`,
+            {
+                messaging_product: "whatsapp",
+                recipient_type: "individual",
+                to,
+                type: "text",
+                text: { preview_url: true, body: formatted },
+            },
+            {
+                headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+                timeout: 15000,
+            }
+        ));
+    } catch (err) {
+        sendError = err;
+    }
+
+    const waMessageId = data?.messages?.[0]?.id || null;
+
+    // Fire-and-forget — same as the inbound raw-webhook forward, this must
+    // never block or fail the actual send/response to the caller. Forwards
+    // both successes (so Jesty gets the message) and failures (so Jesty can
+    // show it as failed too, instead of silently missing it).
+    forwardOutboundMessage({
+        phoneNumberId,
+        waId: to,
+        waMessageId,
+        type: "text",
+        text: formatted,
+        sentBy: sentBy || null,
+        status: sendError ? "failed" : "sent",
+        errorMessage: sendError ? sendError.message : null,
+    });
+
+    if (sendError) throw sendError;
+    return { id: waMessageId };
 }
 
 // Maps our internal media "kind" (image|file) + mimeType to the WhatsApp
@@ -126,13 +163,15 @@ const resolveWhatsappMediaType = (media) => {
 // Conversation.messages[].media (see storage.service.js#saveMedia); `url`
 // may be a relative /uploads/... path, which gets resolved against
 // PUBLIC_BASE_URL.
-async function sendWhatsappMedia(cred, { to, media, caption }) {
+// `sentBy` — see sendWhatsappText's comment above; same meaning here.
+async function sendWhatsappMedia(cred, { to, media, caption, sentBy }) {
     const { phoneNumberId, accessToken } = requireCred(cred);
     if (!to) throw new Error("A destination WhatsApp number is required");
     if (!media?.url) throw new Error("media is required");
 
     const link = toAbsoluteUrl(media.url);
     const type = resolveWhatsappMediaType(media);
+    const formattedCaption = caption?.trim() && type !== "audio" ? markdownToWhatsApp(caption.trim()) : null;
 
     const payload = {
         messaging_product: "whatsapp",
@@ -144,15 +183,41 @@ async function sendWhatsappMedia(cred, { to, media, caption }) {
             ...(type === "document" ? { filename: media.fileName || "file" } : {}),
             // Only image/document/video support a caption on WhatsApp — audio
             // does not. Omit rather than send an ignored field.
-            ...(caption?.trim() && type !== "audio" ? { caption: markdownToWhatsApp(caption.trim()) } : {}),
+            ...(formattedCaption ? { caption: formattedCaption } : {}),
         },
     };
 
-    const { data } = await axios.post(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`, payload, {
-        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-        timeout: 20000,
+    let data;
+    let sendError = null;
+    try {
+        ({ data } = await axios.post(`https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`, payload, {
+            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+            timeout: 20000,
+        }));
+    } catch (err) {
+        sendError = err;
+    }
+
+    const waMessageId = data?.messages?.[0]?.id || null;
+
+    // Fire-and-forget — see sendWhatsappText above for why this isn't awaited/thrown.
+    forwardOutboundMessage({
+        phoneNumberId,
+        waId: to,
+        waMessageId,
+        type,
+        text: formattedCaption,
+        caption: formattedCaption,
+        mediaUrl: link,
+        mediaMimeType: media.mimeType || null,
+        fileName: media.fileName || null,
+        sentBy: sentBy || null,
+        status: sendError ? "failed" : "sent",
+        errorMessage: sendError ? sendError.message : null,
     });
-    return { id: data?.messages?.[0]?.id || null };
+
+    if (sendError) throw sendError;
+    return { id: waMessageId };
 }
 
 // Sends an interactive "list" message — used for the post-resolution CSAT

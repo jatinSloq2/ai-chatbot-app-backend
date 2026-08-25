@@ -44,7 +44,12 @@ const getWhatsappCredential = async (botId) => {
 // message just silently vanishing into the void on a failure (which is
 // what used to happen: this used to be a fire-and-forget
 // `.catch(() => {})` with nothing persisted anywhere).
-const relayToWhatsappIfNeeded = async (conversation, text, media = null, messageId = null) => {
+//
+// `sentBy` is forwarded straight through to whatsappSender's Jesty relay
+// (see internalForward.service.js) — "ai" for the AI/system assistant
+// messages pushed from this file, or the sending agent's id for a real
+// human reply (see sendAgentMessage/retryAgentMessage below).
+const relayToWhatsappIfNeeded = async (conversation, text, media = null, messageId = null, sentBy = "ai") => {
     if (conversation.type !== "whatsapp") return;
     if (!text?.trim() && !media) return;
 
@@ -74,9 +79,14 @@ const relayToWhatsappIfNeeded = async (conversation, text, media = null, message
                 to: conversation.sessionId,
                 media,
                 caption: text,
+                sentBy,
             });
         } else {
-            result = await whatsappSender.sendWhatsappText(credential.whatsapp, { to: conversation.sessionId, message: text });
+            result = await whatsappSender.sendWhatsappText(credential.whatsapp, {
+                to: conversation.sessionId,
+                message: text,
+                sentBy,
+            });
         }
         await markStatus({ deliveryStatus: "sent", whatsappMessageId: result?.id || null, deliveryError: null });
     } catch (err) {
@@ -652,7 +662,7 @@ const sendAgentMessage = async (agent, conversationId, message, options = {}) =>
     // above and don't need this. relayToWhatsappIfNeeded handles its own
     // errors internally (and persists deliveryStatus:"failed" when it hits
     // one), so nothing further to catch here.
-    relayToWhatsappIfNeeded(conversation, message, media || null, pushedMessage._id);
+    relayToWhatsappIfNeeded(conversation, message, media || null, pushedMessage._id, String(agent._id));
 
     return conversation;
 };
@@ -681,7 +691,13 @@ const retryAgentMessage = async (agent, conversationId, messageId) => {
     await conversation.save();
     realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
 
-    relayToWhatsappIfNeeded(conversation, message.content, message.media || null, message._id);
+    relayToWhatsappIfNeeded(
+        conversation,
+        message.content,
+        message.media || null,
+        message._id,
+        conversation.handover.assignedAgent ? String(conversation.handover.assignedAgent) : String(agent._id)
+    );
 
     return conversation;
 };
