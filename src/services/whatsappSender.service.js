@@ -89,12 +89,14 @@ const toAbsoluteUrl = (maybeRelativeUrl) => {
     return `${PUBLIC_BASE_URL}${maybeRelativeUrl.startsWith("/") ? "" : "/"}${maybeRelativeUrl}`;
 };
 
-// `sentBy` identifies who/what triggered this send — "ai" for the bot
-// pipeline's own replies/notices, or the sending agent's id for a
-// handover reply — and is passed straight through to Jesty so it can
-// populate Message.sentBy without us having to guess. Optional: omitted
-// (undefined) for call sites that don't know/care (Jesty just stores null).
-async function sendWhatsappText(cred, { to, message, sentBy }) {
+// `sender` identifies who/what triggered this send — passed straight
+// through to Jesty so it can show "Bot · <bot name>" or "Agent · <agent
+// name>" on the message instead of a bare id:
+//   { type: "bot",   id: "<botId>",   name: "<bot name>" }
+//   { type: "agent", id: "<agentId>", name: "<agent name>" }
+// Optional: omitted entirely for call sites that don't know/care (Jesty
+// just stores everything as null/undefined — no badge shown).
+async function sendWhatsappText(cred, { to, message, sender }) {
     const { phoneNumberId, accessToken } = requireCred(cred);
     if (!to) throw new Error("A destination WhatsApp number is required");
     if (!message?.trim()) throw new Error("message is required");
@@ -134,7 +136,9 @@ async function sendWhatsappText(cred, { to, message, sentBy }) {
         waMessageId,
         type: "text",
         text: formatted,
-        sentBy: sentBy || null,
+        sentBy: sender?.id || null,
+        senderType: sender?.type || null,
+        senderName: sender?.name || null,
         status: sendError ? "failed" : "sent",
         errorMessage: sendError ? sendError.message : null,
     });
@@ -163,8 +167,8 @@ const resolveWhatsappMediaType = (media) => {
 // Conversation.messages[].media (see storage.service.js#saveMedia); `url`
 // may be a relative /uploads/... path, which gets resolved against
 // PUBLIC_BASE_URL.
-// `sentBy` — see sendWhatsappText's comment above; same meaning here.
-async function sendWhatsappMedia(cred, { to, media, caption, sentBy }) {
+// `sender` — see sendWhatsappText's comment above; same meaning here.
+async function sendWhatsappMedia(cred, { to, media, caption, sender }) {
     const { phoneNumberId, accessToken } = requireCred(cred);
     if (!to) throw new Error("A destination WhatsApp number is required");
     if (!media?.url) throw new Error("media is required");
@@ -211,7 +215,9 @@ async function sendWhatsappMedia(cred, { to, media, caption, sentBy }) {
         mediaUrl: link,
         mediaMimeType: media.mimeType || null,
         fileName: media.fileName || null,
-        sentBy: sentBy || null,
+        sentBy: sender?.id || null,
+        senderType: sender?.type || null,
+        senderName: sender?.name || null,
         status: sendError ? "failed" : "sent",
         errorMessage: sendError ? sendError.message : null,
     });

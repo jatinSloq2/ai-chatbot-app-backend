@@ -27,6 +27,12 @@ const {
 // webhooks. See internalForward.service.js for the full picture.
 const { forwardRawWebhook } = require("../services/internalForward.service");
 
+// Every direct whatsappSender call in this file is the bot/AI/system side
+// of the conversation (never a human agent — agent replies go through
+// handover.service.js instead) — this is what lets Jesty show a "Bot"
+// badge with the bot's own name next to these messages.
+const botSender = (bot) => ({ type: "bot", id: String(bot._id), name: bot.name });
+
 /**
  * GET /api/whatsapp/webhook
  *
@@ -333,7 +339,7 @@ const handleInboundInteractive = async ({ phoneNumberId, from, replyId }) => {
 
     const thankYou = bot.agentConfig?.csatThankYouMessage || "Thanks for the feedback!";
     try {
-        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: thankYou, sentBy: "ai" });
+        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: thankYou, sender: botSender(bot) });
     } catch (err) {
         logger.error(`[whatsapp] Failed to send CSAT thank-you to ${from}: ${err.message}`);
     }
@@ -371,7 +377,7 @@ const handleInboundMedia = async ({ phoneNumberId, from, mediaId, mediaType, cap
             await whatsappSender.sendWhatsappText(credential.whatsapp, {
                 to: from,
                 message: "I couldn't download that attachment — mind resending it?",
-                sentBy: "ai",
+                sender: botSender(bot),
             });
         } catch (sendErr) {
             logger.error(`[whatsapp] Also failed to notify ${from} of the download failure: ${sendErr.message}`);
@@ -408,7 +414,7 @@ const handleInboundMedia = async ({ phoneNumberId, from, mediaId, mediaType, cap
         await whatsappSender.sendWhatsappText(credential.whatsapp, {
             to: from,
             message: `Got your ${mediaType || "file"} — let me know if you have a question about it!`,
-            sentBy: "ai",
+            sender: botSender(bot),
         });
     } catch (err) {
         logger.error(`[whatsapp] Failed to send media-received ack to ${from}: ${err.message}`);
@@ -442,7 +448,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skip
             await whatsappSender.sendWhatsappText(credential.whatsapp, {
                 to: from,
                 message: "I can only read text messages right now — could you type that out for me?",
-                sentBy: "ai",
+                sender: botSender(bot),
             });
         } catch (err) {
             logger.error(`[whatsapp] Failed to send unsupported-media notice to ${from}: ${err.message}`);
@@ -581,7 +587,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skip
                 });
                 conversation.messages.push({ role: "assistant", content: fullResponse });
                 await conversation.save();
-                await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: fullResponse, sentBy: "ai" });
+                await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: fullResponse, sender: botSender(bot) });
             }
             return;
         }
@@ -590,7 +596,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skip
         conversation.messages.push({ role: "assistant", content: fullResponse });
         await conversation.save();
 
-        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: fullResponse, sentBy: "ai" });
+        await whatsappSender.sendWhatsappText(credential.whatsapp, { to: from, message: fullResponse, sender: botSender(bot) });
     } catch (err) {
         success = false;
         errorMessage = err.message;
@@ -599,7 +605,7 @@ const handleInboundMessage = async ({ phoneNumberId, from, messageId, text, skip
             await whatsappSender.sendWhatsappText(credential.whatsapp, {
                 to: from,
                 message: "Sorry, something went wrong on our end. Please try again in a moment.",
-                sentBy: "ai",
+                sender: botSender(bot),
             });
         } catch (sendErr) {
             logger.error(`[whatsapp] Also failed to send the apology to ${from}: ${sendErr.message}`);

@@ -14,13 +14,15 @@ const { isWithinBusinessHours, describeBusinessHours } = require("./businessHour
 // Looks up the active WhatsApp credential for a bot, or null if this bot
 // isn't WhatsApp-connected / the credential is missing. Shared by every
 // relay/prompt helper below so there's one place that knows how to go from
-// "a conversation" to "the Cloud API creds to send on it".
+// "a conversation" to "the Cloud API creds to send on it". Also returns the
+// bot's own `name` — relayToWhatsappIfNeeded needs it to tell Jesty which
+// bot sent a message (see the `sender` param below).
 const getWhatsappCredential = async (botId) => {
-    const bot = await Bot.findById(botId).select("whatsappConfig");
+    const bot = await Bot.findById(botId).select("whatsappConfig name");
     const credentialId = bot?.whatsappConfig?.credentialId;
-    if (!credentialId) return null;
+    if (!credentialId) return { credential: null, bot };
     const credential = await IntegrationCredential.findOne({ _id: credentialId, channel: "whatsapp", isActive: true });
-    return credential || null;
+    return { credential: credential || null, bot };
 };
 
 // A conversation with type:"whatsapp" has no SSE/poll listener on the other
@@ -45,11 +47,14 @@ const getWhatsappCredential = async (botId) => {
 // what used to happen: this used to be a fire-and-forget
 // `.catch(() => {})` with nothing persisted anywhere).
 //
-// `sentBy` is forwarded straight through to whatsappSender's Jesty relay
-// (see internalForward.service.js) — "ai" for the AI/system assistant
-// messages pushed from this file, or the sending agent's id for a real
-// human reply (see sendAgentMessage/retryAgentMessage below).
-const relayToWhatsappIfNeeded = async (conversation, text, media = null, messageId = null, sentBy = "ai") => {
+// `sender`, when passed, is forwarded straight through to whatsappSender's
+// Jesty relay (see internalForward.service.js) — pass
+// `{ type: "agent", id, name }` for a real human reply (see
+// sendAgentMessage/retryAgentMessage below). Left null/omitted for every
+// AI/system assistant message this file pushes on its own — those resolve
+// to `{ type: "bot", id: <botId>, name: <bot's own name> }` below, once the
+// bot itself has been looked up for its credential anyway.
+const relayToWhatsappIfNeeded = async (conversation, text, media = null, messageId = null, sender = null) => {
     if (conversation.type !== "whatsapp") return;
     if (!text?.trim() && !media) return;
 
@@ -68,24 +73,28 @@ const relayToWhatsappIfNeeded = async (conversation, text, media = null, message
     };
 
     try {
-        const credential = await getWhatsappCredential(conversation.bot);
+        const { credential, bot } = await getWhatsappCredential(conversation.bot);
         if (!credential) {
             await markStatus({ deliveryStatus: "failed", deliveryError: "No active WhatsApp credential configured for this bot" });
             return;
         }
+        // No explicit sender (agent) was passed in -> this is one of the
+        // AI/system assistant messages this file pushes itself, so it's the
+        // bot talking.
+        const resolvedSender = sender || { type: "bot", id: String(conversation.bot), name: bot?.name || null };
         let result;
         if (media) {
             result = await whatsappSender.sendWhatsappMedia(credential.whatsapp, {
                 to: conversation.sessionId,
                 media,
                 caption: text,
-                sentBy,
+                sender: resolvedSender,
             });
         } else {
             result = await whatsappSender.sendWhatsappText(credential.whatsapp, {
                 to: conversation.sessionId,
                 message: text,
-                sentBy,
+                sender: resolvedSender,
             });
         }
         await markStatus({ deliveryStatus: "sent", whatsappMessageId: result?.id || null, deliveryError: null });
@@ -102,7 +111,7 @@ const relayToWhatsappIfNeeded = async (conversation, text, media = null, message
 const sendWhatsappCsatPrompt = async (conversation, bodyText) => {
     if (conversation.type !== "whatsapp") return;
     try {
-        const credential = await getWhatsappCredential(conversation.bot);
+        const { credential } = await getWhatsappCredential(conversation.bot);
         if (!credential) return;
         await whatsappSender.sendWhatsappList(credential.whatsapp, {
             to: conversation.sessionId,
@@ -662,7 +671,11 @@ const sendAgentMessage = async (agent, conversationId, message, options = {}) =>
     // above and don't need this. relayToWhatsappIfNeeded handles its own
     // errors internally (and persists deliveryStatus:"failed" when it hits
     // one), so nothing further to catch here.
-    relayToWhatsappIfNeeded(conversation, message, media || null, pushedMessage._id, String(agent._id));
+    relayToWhatsappIfNeeded(conversation, message, media || null, pushedMessage._id, {
+        type: "agent",
+        id: String(agent._id),
+        name: agent.name,
+    });
 
     return conversation;
 };
@@ -691,13 +704,15 @@ const retryAgentMessage = async (agent, conversationId, messageId) => {
     await conversation.save();
     realtimeService.publish(`conv:${conversation._id}`, "update", { scope: "update" });
 
-    relayToWhatsappIfNeeded(
-        conversation,
-        message.content,
-        message.media || null,
-        message._id,
-        conversation.handover.assignedAgent ? String(conversation.handover.assignedAgent) : String(agent._id)
-    );
+    relayToWhatsappIfNeeded(conversation, message.content, message.media || null, message._id, {
+        type: "agent",
+        id: conversation.handover.assignedAgent ? String(conversation.handover.assignedAgent) : String(agent._id),
+        // message.agentName is the snapshot taken when this message was
+        // originally sent (see sendAgentMessage) — prefer it over the
+        // retrying agent's own name in case a different agent (e.g. after
+        // a transfer) is the one clicking retry.
+        name: message.agentName || agent.name,
+    });
 
     return conversation;
 };

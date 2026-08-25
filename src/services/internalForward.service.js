@@ -95,7 +95,13 @@ const forwardRawWebhook = async (rawBody) => {
 //     type,                 // "text" | "image" | "video" | "audio" | "document"
 //     text,                 // body text (text messages) / caption (media messages)
 //     mediaUrl, mediaMimeType, fileName, // present for media sends only
-//     sentBy,               // "ai" for bot replies, or the sending agent's id
+//     sentBy,               // id of whoever/whatever sent it — botId for a bot
+//                           // reply, agentId for a human agent reply, or null
+//     senderType,           // "bot" | "agent" | null — lets Jesty show a
+//                           // "Bot"/"Agent" badge; null for anything else
+//                           // (e.g. a send Jesty's own UI already knows about)
+//     senderName,           // display name to go with senderType — the bot's
+//                           // name, or the agent's name
 //     status,               // "sent" | "failed"
 //     errorMessage,         // present when status:"failed"
 //     timestamp,            // ISO string, when we attempted the send
