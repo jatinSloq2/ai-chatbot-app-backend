@@ -175,4 +175,5 @@ module.exports = {
   getDefaultCredential,
   setDefault,
   testConnection,
+  clearOtherDefaults, // exported for whatsappEmbeddedSignup.controller.js — same "one default per channel" rule applies there
 };

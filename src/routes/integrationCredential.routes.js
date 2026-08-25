@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const credentialController = require("../controllers/integrationCredential.controller");
+const whatsappEmbeddedSignupController = require("../controllers/whatsappEmbeddedSignup.controller");
 const { protect } = require("../middlewares/auth.middleware");
 
 /**
@@ -151,6 +152,64 @@ router.use(protect);
  *                   items: { $ref: "#/components/schemas/IntegrationCredential" }
  *       401: { $ref: "#/components/responses/Unauthorized" }
  */
+/**
+ * @openapi
+ * /api/credentials/whatsapp/embedded-signup/config:
+ *   get:
+ *     tags: [Integrations]
+ *     summary: Public config for booting the WhatsApp Embedded Signup popup (Meta App ID + login config id)
+ *     responses:
+ *       200: { description: Config }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ * /api/credentials/whatsapp/embedded-signup/exchange:
+ *   post:
+ *     tags: [Integrations]
+ *     summary: Complete WhatsApp Embedded Signup — exchange the popup's code for a token and create the credential
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [code, wabaId, phoneNumberId]
+ *             properties:
+ *               code: { type: string }
+ *               wabaId: { type: string }
+ *               phoneNumberId: { type: string }
+ *               businessId: { type: string }
+ *               label: { type: string }
+ *               isDefault: { type: boolean }
+ *     responses:
+ *       201: { description: Created }
+ *       400: { $ref: "#/components/responses/ValidationError" }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ *
+ * NOTE: these two must be registered before GET/PATCH/DELETE "/:id" below,
+ * or Express would match "embedded-signup" itself as an :id.
+ */
+router.get("/whatsapp/embedded-signup/config", whatsappEmbeddedSignupController.getEmbeddedSignupConfig);
+router.post("/whatsapp/embedded-signup/exchange", whatsappEmbeddedSignupController.exchangeEmbeddedSignup);
+
+/**
+ * @openapi
+ * /api/credentials/whatsapp/{id}/inbox-sso:
+ *   get:
+ *     tags: [Integrations]
+ *     summary: Get a one-time signed SSO redirect URL into the separately-hosted Inbox platform, scoped to this WhatsApp number
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: "{ redirectUrl }" }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ *       404: { $ref: "#/components/responses/NotFound" }
+ *
+ * Also registered before "/:id" for the same reason as above.
+ */
+router.get("/whatsapp/:id/inbox-sso", whatsappEmbeddedSignupController.getInboxSsoRedirect);
+
 router.get("/", credentialController.listCredentials);
 
 /**

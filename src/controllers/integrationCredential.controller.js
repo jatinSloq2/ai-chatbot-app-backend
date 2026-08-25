@@ -368,6 +368,7 @@ const testConnection = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
+  sanitizeCredential, // exported for whatsappEmbeddedSignup.controller.js, which creates whatsapp credentials via a separate flow but must return them shaped the same way
   listCredentials,
   getCredential,
   createEmailSmtp,
