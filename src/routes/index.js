@@ -4,6 +4,7 @@ const router = express.Router();
 const authRoutes = require("./auth.routes");
 const botRoutes = require("./bot.routes");
 const planRoutes = require("./plan.routes");
+const addonRoutes = require("./addon.routes");
 const paymentRoutes = require("./payment.routes");
 const publicRoutes = require("./public.routes");
 const dashboardRoutes = require("./dashboard.routes");
@@ -22,6 +23,7 @@ const couponRoutes = require("./coupon.routes");
 router.use("/auth", authRoutes);
 router.use("/bots", botRoutes);
 router.use("/plans", planRoutes);
+router.use("/addons", addonRoutes); // purchasable add-ons sold alongside a plan (e.g. WhatsApp Inbox, message packs)
 router.use("/payments", paymentRoutes);
 router.use("/dashboard", dashboardRoutes);
 router.use("/admin", adminRoutes);

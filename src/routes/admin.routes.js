@@ -206,4 +206,145 @@ router.get("/subscriptions", adminController.listSubscriptions);
  */
 router.get("/analytics", analyticsController.getPlatformAnalytics);
 
+/**
+ * @openapi
+ * /api/admin/addons:
+ *   get:
+ *     tags: [Admin]
+ *     summary: List the full add-on catalog, including inactive rows
+ *     responses:
+ *       200: { description: Add-on catalog }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ *       403: { $ref: "#/components/responses/Forbidden" }
+ *   post:
+ *     tags: [Admin]
+ *     summary: Create a new add-on
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, slug, price]
+ *             properties:
+ *               name: { type: string }
+ *               slug: { type: string }
+ *               description: { type: string }
+ *               price:
+ *                 type: object
+ *                 properties: { inr: { type: integer }, usd: { type: integer } }
+ *               billingType: { type: string, enum: [lifetime, recurring], default: lifetime }
+ *               interval: { type: string, enum: [month, quarter, year] }
+ *               limit:
+ *                 type: object
+ *                 properties: { amount: { type: integer }, unit: { type: string } }
+ *               sampleSheetUrl: { type: string }
+ *               sortOrder: { type: integer }
+ *     responses:
+ *       201: { description: Add-on created }
+ *       400: { $ref: "#/components/responses/ValidationError" }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ *       403: { $ref: "#/components/responses/Forbidden" }
+ */
+router.get("/addons", adminController.listAllAddOns);
+router.post("/addons", adminController.createAddOn);
+
+/**
+ * @openapi
+ * /api/admin/addons/{id}:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Update an add-on
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Add-on updated }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ *       403: { $ref: "#/components/responses/Forbidden" }
+ *       404: { $ref: "#/components/responses/NotFound" }
+ *   delete:
+ *     tags: [Admin]
+ *     summary: Deactivate an add-on (soft delete)
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Add-on deactivated }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ *       403: { $ref: "#/components/responses/Forbidden" }
+ *       404: { $ref: "#/components/responses/NotFound" }
+ */
+router.patch("/addons/:id", adminController.updateAddOn);
+router.delete("/addons/:id", adminController.deleteAddOn);
+
+/**
+ * @openapi
+ * /api/admin/user-addons:
+ *   get:
+ *     tags: [Admin]
+ *     summary: List add-on ownership records platform-wide
+ *     parameters:
+ *       - in: query
+ *         name: userId
+ *         schema: { type: string }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [created, active, expired, cancelled] }
+ *     responses:
+ *       200: { description: Ownership records }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ *       403: { $ref: "#/components/responses/Forbidden" }
+ */
+router.get("/user-addons", adminController.listUserAddOns);
+
+/**
+ * @openapi
+ * /api/admin/user-addons/grant:
+ *   post:
+ *     tags: [Admin]
+ *     summary: Manually grant an add-on to a user, bypassing Razorpay
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [userId, addOnId]
+ *             properties:
+ *               userId: { type: string }
+ *               addOnId: { type: string }
+ *               note: { type: string }
+ *     responses:
+ *       201: { description: Add-on granted }
+ *       400: { $ref: "#/components/responses/ValidationError" }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ *       403: { $ref: "#/components/responses/Forbidden" }
+ *       404: { description: Add-on not found }
+ */
+router.post("/user-addons/grant", adminController.grantAddOn);
+
+/**
+ * @openapi
+ * /api/admin/user-addons/{id}/revoke:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Revoke a previously granted/purchased add-on
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Add-on revoked }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ *       403: { $ref: "#/components/responses/Forbidden" }
+ *       404: { $ref: "#/components/responses/NotFound" }
+ */
+router.patch("/user-addons/:id/revoke", adminController.revokeAddOn);
+
 module.exports = router;
