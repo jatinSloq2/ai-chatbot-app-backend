@@ -112,6 +112,28 @@ router.get("/", botController.listBots);
 
 /**
  * @openapi
+ * /api/bots/demo-sheet:
+ *   get:
+ *     tags: [Bots]
+ *     summary: Download a filled-in demo Google Sheet (.xlsx)
+ *     description: |
+ *       Not bot-specific — the same reference file for any bot. Every tab
+ *       required by the Google Sheets tool integration, with sample rows
+ *       demonstrating the real options on each tab (stock-counted vs
+ *       bookable items, every meeting provider, every status value).
+ *       Generated on the backend on every request.
+ *     responses:
+ *       200:
+ *         description: The .xlsx file
+ *         content:
+ *           application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+ *             schema: { type: string, format: binary }
+ *       401: { $ref: "#/components/responses/Unauthorized" }
+ */
+router.get("/demo-sheet", botController.downloadDemoSheet);
+
+/**
+ * @openapi
  * /api/bots/{id}:
  *   get:
  *     tags: [Bots]

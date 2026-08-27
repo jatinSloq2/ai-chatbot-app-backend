@@ -4,6 +4,7 @@ const Bot = require("../models/Bot");
 const Document = require("../models/Document");
 const botService = require("../services/bot.service");
 const storageService = require("../services/storage.service");
+const { buildDemoSheetBuffer } = require("../services/demoSheet.service");
 
 const sanitizeBot = (bot) => ({
   id: bot._id,
@@ -527,6 +528,21 @@ const setToolsConfig = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, data: { bot: sanitizeBot(bot) } });
 });
 
+// GET /api/bots/demo-sheet
+// Streams a filled-in .xlsx with all 8 required tabs (headers straight from
+// googleSheets.service.js#REQUIRED_TABS, so this can never drift from what
+// the sheet integration actually reads/writes), plus sample rows covering
+// every tab's real options — stock-counted vs bookable items, every meeting
+// provider, every status value. Not bot-specific; same file for any bot.
+const downloadDemoSheet = asyncHandler(async (req, res) => {
+  const buffer = buildDemoSheetBuffer();
+
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", 'attachment; filename="jestbot-demo-sheet.xlsx"');
+  res.setHeader("Content-Length", buffer.length);
+  res.status(200).send(buffer);
+});
+
 module.exports = {
   createBot,
   listBots,
@@ -541,4 +557,5 @@ module.exports = {
   setLanguageConfig,
   setWhatsappChannel,
   setToolsConfig,
+  downloadDemoSheet,
 };
