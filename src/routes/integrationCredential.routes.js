@@ -183,7 +183,6 @@ router.use(protect);
  *       201: { description: Created }
  *       400: { $ref: "#/components/responses/ValidationError" }
  *       401: { $ref: "#/components/responses/Unauthorized" }
- *
  * NOTE: these two must be registered before GET/PATCH/DELETE "/:id" below,
  * or Express would match "embedded-signup" itself as an :id.
  */
@@ -205,7 +204,6 @@ router.post("/whatsapp/embedded-signup/exchange", whatsappEmbeddedSignupControll
  *       200: { description: "{ redirectUrl }" }
  *       401: { $ref: "#/components/responses/Unauthorized" }
  *       404: { $ref: "#/components/responses/NotFound" }
- *
  * Also registered before "/:id" for the same reason as above.
  */
 router.get("/whatsapp/:id/inbox-sso", whatsappEmbeddedSignupController.getInboxSsoRedirect);

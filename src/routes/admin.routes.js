@@ -125,6 +125,7 @@ router.patch("/users/:id/role", adminController.setUserRole);
  *       404: { $ref: "#/components/responses/NotFound" }
  */
 router.patch("/users/:id/suspend", adminController.suspendUserBots);
+router.post("/users/:id/assign-plan", adminController.assignUserPlan);
 
 /**
  * @openapi

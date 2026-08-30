@@ -33,6 +33,8 @@ const planSchema = new mongoose.Schema(
       maxAgents: { type: Number, required: true, default: 0 }, // 0 = no agent seats on this plan
       maxTeams: { type: Number, required: true, default: 0 },
       maxAgentsPerTeam: { type: Number, required: true, default: 0 },
+      allowWhatsApp: { type: Boolean, default: false },
+      allowTools: { type: Boolean, default: false },
 
       // --- Monetization: widget watermark removal ---
       // When true, bots on this plan may hide the "Powered by JestBot"

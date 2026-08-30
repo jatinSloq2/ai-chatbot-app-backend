@@ -14,7 +14,7 @@ const addOns = [
     name: "WhatsApp Inbox",
     slug: "whatsapp-inbox",
     description: "Unlock the WhatsApp Business inbox alongside your bot's existing channels — lifetime access.",
-    price: { inr: 499900, usd: 5999 }, // ₹4999 / $59.99, one-time
+    price: { inr: 199900, usd: 2499 }, // ₹1999 / $24.99, one-time
     billingType: "lifetime",
     interval: null,
     limit: { amount: 10000, unit: "messages" },
@@ -22,10 +22,10 @@ const addOns = [
     sortOrder: 1,
   },
   {
-    name: "Utility Messages — 10K",
-    slug: "utility-messages-10k",
-    description: "10,000 WhatsApp Business API utility (transactional) messages.",
-    price: { inr: 149900, usd: 1799 }, // ₹1499 / $17.99
+    name: "Template Messages — 10K",
+    slug: "template-messages-10k",
+    description: "10,000 WhatsApp Business API template messages (Utility, Marketing, and Authentication).",
+    price: { inr: 49900, usd: 599 }, // ₹499 / $5.99
     billingType: "lifetime",
     interval: null,
     limit: { amount: 10000, unit: "messages" },
@@ -33,48 +33,26 @@ const addOns = [
     sortOrder: 2,
   },
   {
-    name: "Marketing Messages — 10K",
-    slug: "marketing-messages-10k",
-    description: "10,000 WhatsApp Business API marketing/broadcast messages.",
-    price: { inr: 199900, usd: 2399 }, // ₹1999 / $23.99
-    billingType: "lifetime",
-    interval: null,
-    limit: { amount: 10000, unit: "messages" },
-    sampleSheetUrl: null,
-    sortOrder: 3,
-  },
-  {
-    name: "Authentication Messages — 10K",
-    slug: "authentication-messages-10k",
-    description: "10,000 WhatsApp Business API authentication (OTP) messages.",
-    price: { inr: 129900, usd: 1599 }, // ₹1299 / $15.99
-    billingType: "lifetime",
-    interval: null,
-    limit: { amount: 10000, unit: "messages" },
-    sampleSheetUrl: null,
-    sortOrder: 4,
-  },
-  {
-    name: "Template Messages",
-    slug: "template-messages",
+    name: "Template Management",
+    slug: "template-management",
     description: "Create and submit WhatsApp message templates for approval.",
-    price: { inr: 99900, usd: 1199 }, // ₹999 / $11.99, lifetime feature unlock
+    price: { inr: 29900, usd: 399 }, // ₹299 / $3.99, lifetime feature unlock
     billingType: "lifetime",
     interval: null,
     limit: { amount: null, unit: null },
     sampleSheetUrl: null,
-    sortOrder: 5,
+    sortOrder: 3,
   },
   {
     name: "AI Template Builder",
     slug: "ai-template-builder",
     description: "AI-assisted drafting and formatting of WhatsApp message templates.",
-    price: { inr: 149900, usd: 1799 }, // ₹1499 / $17.99, lifetime feature unlock
+    price: { inr: 49900, usd: 599 }, // ₹499 / $5.99, lifetime feature unlock
     billingType: "lifetime",
     interval: null,
     limit: { amount: null, unit: null },
     sampleSheetUrl: null,
-    sortOrder: 6,
+    sortOrder: 4,
   },
 ];
 

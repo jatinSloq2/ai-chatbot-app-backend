@@ -376,8 +376,17 @@ const setWhatsappChannel = asyncHandler(async (req, res) => {
   }
 
   if (enabled !== undefined) {
-    if (enabled && !bot.whatsappConfig.credentialId) {
-      throw new ApiError(400, "Select a WhatsApp credential before enabling this channel");
+    if (enabled) {
+      const plan = await botService.getActivePlan(req.user._id);
+      if (!plan.limits.allowWhatsApp) {
+        throw new ApiError(
+          403,
+          `WhatsApp channel isn't available on your plan (${plan.name}). Upgrade to enable this.`
+        );
+      }
+      if (!bot.whatsappConfig.credentialId) {
+        throw new ApiError(400, "Select a WhatsApp credential before enabling this channel");
+      }
     }
     bot.whatsappConfig.enabled = !!enabled;
   }
@@ -506,6 +515,13 @@ const setToolsConfig = asyncHandler(async (req, res) => {
 
   if (enabled !== undefined) {
     if (enabled) {
+      const plan = await botService.getActivePlan(req.user._id);
+      if (!plan.limits.allowTools) {
+        throw new ApiError(
+          403,
+          `Tool integrations aren't available on your plan (${plan.name}). Upgrade to enable this.`
+        );
+      }
       if (!bot.toolsConfig.purposes?.length) {
         throw new ApiError(400, "Pick at least one of support / orders / bookings / meetings before enabling tools");
       }

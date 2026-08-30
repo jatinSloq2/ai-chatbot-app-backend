@@ -33,9 +33,10 @@ const protect = asyncHandler(async (req, res, next) => {
 
 module.exports = { protect };
 
-// Requires the logged-in user to have role "admin". Must run after `protect`.
+// Requires the logged-in user to have role "admin" AND be on the allowlist. Must run after `protect`.
 const requireAdmin = (req, res, next) => {
-  if (req.user?.role !== "admin") {
+  const allowedAdmins = ["jatinsingh098hp@gmail.com", "jestbotai@gmail.com"];
+  if (req.user?.role !== "admin" || !allowedAdmins.includes(req.user.email)) {
     return next(new (require("../utils/ApiError"))(403, "Admin access required"));
   }
   next();

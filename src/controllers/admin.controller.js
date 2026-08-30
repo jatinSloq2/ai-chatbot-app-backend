@@ -250,6 +250,42 @@ const revokeAddOn = asyncHandler(async (req, res) => {
   res.status(200).json({ success: true, message: "Add-on revoked", data: { userAddOn } });
 });
 
+// POST /api/admin/users/:id/assign-plan   body: { planId, durationMonths? }
+const assignUserPlan = asyncHandler(async (req, res) => {
+  const { planId, durationMonths = 1 } = req.body;
+  if (!planId) throw new ApiError(400, "planId is required");
+
+  const plan = await Plan.findById(planId);
+  if (!plan) throw new ApiError(404, "Plan not found");
+
+  const startDate = new Date();
+  const endDate = new Date();
+  endDate.setMonth(startDate.getMonth() + durationMonths);
+
+  // Mark existing active subscriptions as cancelled to avoid conflicts
+  await Subscription.updateMany(
+    { user: req.params.id, status: { $in: ["active", "cancelled"] }, endDate: { $gt: new Date() } },
+    { status: "cancelled" }
+  );
+
+  const subscription = await Subscription.create({
+    user: req.params.id,
+    plan: plan._id,
+    status: "active",
+    startDate,
+    endDate,
+    amount: 0, // Admin grant is free
+    currency: "inr",
+    grantedBy: req.user._id,
+  });
+
+  res.status(201).json({
+    success: true,
+    message: `Plan ${plan.name} assigned to user for ${durationMonths} month(s)`,
+    data: { subscription },
+  });
+});
+
 module.exports = {
   getOverview,
   listUsers,
@@ -264,4 +300,5 @@ module.exports = {
   listUserAddOns,
   grantAddOn,
   revokeAddOn,
+  assignUserPlan,
 };
