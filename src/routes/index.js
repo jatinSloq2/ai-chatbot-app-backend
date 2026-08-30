@@ -38,7 +38,7 @@ router.use("/credentials", integrationCredentialRoutes); // owner-side integrati
 router.use("/oauth", oauthRoutes); // Google/Microsoft "Connect Gmail / Connect Outlook" real OAuth2 flow
 router.use("/referral", referralRoutes); // referral codes, applying one, wallet balance/ledger, admin referral-offer settings
 router.use("/coupons", couponRoutes); // admin-managed discount coupons + checkout-time validation
-router.use("/blogs", blogRoutes);
+router.use("/blog", blogRoutes);
 router.use("/v1", publicRoutes); // public developer-facing API (secret/public key auth, not user JWT)
 
 module.exports = router;
