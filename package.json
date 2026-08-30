@@ -9,6 +9,7 @@
     "dev": "nodemon src/server.js",
     "seed:plans": "node src/scripts/seedPlans.js",
     "seed:addons": "node src/scripts/seedAddOns.js",
+    "seed:blogs": "node src/scripts/seedBlogs.js",
     "make:admin": "node src/scripts/makeAdmin.js",
     "test": "jest --runInBand",
     "test:unit": "jest --config jest.config.unit.js"
