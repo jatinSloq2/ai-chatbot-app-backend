@@ -12,48 +12,38 @@ const addOns = [
     slug: "whatsapp-inbox",
     description:
       "Unlock the WhatsApp Business inbox alongside your bot's existing channels — lifetime access.",
-    price: { inr: 199900, usd: 2499 },
+    price: { inr: 9900, usd: 199 },
     billingType: "lifetime",
     interval: null,
     limit: { amount: 10000, unit: "messages" },
     sampleSheetUrl: null,
     sortOrder: 1,
   },
+
   {
     name: "Template Messages — 10K",
     slug: "template-messages-10k",
     description:
       "10,000 WhatsApp Business API template messages (Utility, Marketing, and Authentication).",
-    price: { inr: 49900, usd: 599 },
+    price: { inr: 14900, usd: 199 },
     billingType: "lifetime",
     interval: null,
     limit: { amount: 10000, unit: "messages" },
     sampleSheetUrl: null,
     sortOrder: 2,
   },
+
   {
     name: "Template Management",
     slug: "template-management",
     description:
       "Create and submit WhatsApp message templates for approval.",
-    price: { inr: 29900, usd: 399 },
+    price: { inr: 9900, usd: 199 },
     billingType: "lifetime",
     interval: null,
     limit: { amount: null, unit: null },
     sampleSheetUrl: null,
     sortOrder: 3,
-  },
-  {
-    name: "AI Template Builder",
-    slug: "ai-template-builder",
-    description:
-      "AI-assisted drafting and formatting of WhatsApp message templates.",
-    price: { inr: 49900, usd: 599 },
-    billingType: "lifetime",
-    interval: null,
-    limit: { amount: null, unit: null },
-    sampleSheetUrl: null,
-    sortOrder: 4,
   },
 ];
 
